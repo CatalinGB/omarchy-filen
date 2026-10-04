@@ -9,6 +9,11 @@ import "Model.js" as Model
 // the panel, forwarding the open/close contract the bar's popout coordinator
 // expects. All state comes from the plugin's service, so two monitors show the
 // same thing without either of them polling.
+//
+// `BarIconButton` is a fixed-width slot, so the optional text label is a
+// sibling of the icon rather than baked into its `text`: the widget sizes
+// itself to the two together and reserves exactly that width in the bar
+// (otherwise the label overlaps the neighbouring widget).
 BarWidget {
   id: root
   moduleName: "io.github.catalingb.filen"
@@ -47,6 +52,8 @@ BarWidget {
     if (state === "mounted" && filen.quotaKnown) return Model.formatBytes(filen.usedBytes)
     return Model.stateLabel(state)
   }
+
+  readonly property bool labelShown: root.showLabel && root.labelText !== ""
 
   // The shell injects `settings` into widgets but not into services, so the
   // widget forwards them. Every bar instance writes the same value, which is
@@ -91,8 +98,9 @@ BarWidget {
     if (panelLoader.item) panelLoader.item.closeForPopoutSwitch()
   }
 
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
+  // Size to the icon plus the optional label; the bar reserves this width.
+  implicitWidth: row.implicitWidth
+  implicitHeight: row.implicitHeight
 
   onBarChanged: injectPanel()
   onSettingsChanged: { injectPanel(); syncService() }
@@ -109,18 +117,46 @@ BarWidget {
     }
   }
 
-  BarIconButton {
-    id: button
-    anchors.fill: parent
-    bar: root.bar
-    text: root.showLabel && root.labelText !== "" ? root.glyph + "  " + root.labelText : root.glyph
-    foreground: root.iconColor
-    opacity: root.iconOpacity
-    slotSize: Style.bar.statusSlot
-    tooltipText: ""
+  Row {
+    id: row
+    anchors.left: parent.left
+    anchors.verticalCenter: parent.verticalCenter
+    // Only pay the gap when the label is actually shown.
+    spacing: root.labelShown ? Style.space(5) : 0
 
-    onPressed: function(b) {
-      if (b === Qt.MiddleButton && root.filen) root.filen.refresh()
+    BarIconButton {
+      id: button
+      bar: root.bar
+      text: root.glyph
+      foreground: root.iconColor
+      opacity: root.iconOpacity
+      slotSize: Style.bar.statusSlot
+      tooltipText: ""
+      // The overlay below owns input, so icon and label behave as one target.
+      interactive: false
+    }
+
+    Text {
+      id: labelTextItem
+      visible: root.labelShown
+      height: button.height
+      text: root.labelText
+      color: root.iconColor
+      opacity: root.iconOpacity
+      font.family: root.bar ? root.bar.fontFamily : Style.font.family
+      font.pixelSize: Style.font.body
+      verticalAlignment: Text.AlignVCenter
+    }
+  }
+
+  MouseArea {
+    anchors.fill: parent
+    hoverEnabled: true
+    cursorShape: Qt.PointingHandCursor
+    acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+
+    onPressed: function(mouse) {
+      if (mouse.button === Qt.MiddleButton && root.filen) root.filen.refresh()
       else root.togglePanel()
     }
   }

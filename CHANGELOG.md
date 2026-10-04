@@ -14,6 +14,11 @@ and this project adheres to
   refresh / panel options, mount-at-login, and **Reset to defaults** — dismissed
   by Esc, a click outside, or its close button.
 
+### Fixed
+
+- The bar widget reserves width for its optional text label, so enabling
+  **Show text in bar** no longer overlaps the neighbouring widget.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added
