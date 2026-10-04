@@ -25,7 +25,7 @@ from pathlib import Path
 DEFAULT_MOUNT_ROOT = "~/Filen"
 DEFAULT_FILEN_BIN = "~/.local/share/omarchy-filen/bin/filen"
 DEFAULT_CREDENTIAL = "~/.config/credstore.encrypted/filen-auth"
-MOUNT_UNIT = "filen-mount.service"
+MOUNT_UNIT = "omarchy-filen-mount.service"
 MOUNTINFO_PATH = "/proc/self/mountinfo"
 
 # The status timer refreshes the API fragment on a slow cadence (default 10

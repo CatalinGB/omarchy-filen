@@ -540,7 +540,13 @@ cmd_mount_run() {
       mount --cache-size "$CACHE_SIZE" "$MOUNT_ROOT"
     return 0
   fi
-  # filen-rs (0.2.8) looks for its managed rclone at
+  # A crash can leave the FUSE transport dead while the kernel still records a
+  # mount; clear that before mounting. A live mount is skipped (mountpoint -q
+  # succeeds), so this never unmounts a healthy drive.
+  if ! mountpoint -q "$MOUNT_ROOT" 2>/dev/null; then
+    have fusermount3 && fusermount3 -uz "$MOUNT_ROOT" 2>/dev/null || true
+  fi
+  # filen-rs looks for its managed rclone at
   #   <config-dir>/rclone/<rclone-name>
   # so pre-seed that exact path from our persistent copy. Without it, filen
   # tries to download rclone at unit start and panics.
