@@ -8,20 +8,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-04
+
 ### Added
 
 - A cogwheel in the panel opens a separate **Settings** window — storage /
   refresh / panel options, mount-at-login, and **Reset to defaults** — dismissed
   by Esc, a click outside, or its close button.
-
-### Fixed
-
-- The bar widget reserves width for its optional text label, so enabling
-  **Show text in bar** no longer overlaps the neighbouring widget.
-
-## [0.2.0] - 2026-10-04
-
-### Added
 
 - `setup doctor` — reports pinned vs installed `filen`, the rclone seed, the unit
   files, the credential, and the mount unit state; exits non-zero when unhealthy.
@@ -71,6 +64,8 @@ and this project adheres to
 
 ### Fixed
 
+- The bar widget reserves width for its optional text label, so enabling
+  **Show text in bar** no longer overlaps the neighbouring widget.
 - Bound mount restarts with `StartLimitIntervalSec`/`StartLimitBurst`, so a
   failing mount lands in `failed` instead of storming the user manager.
 - The status helper distinguishes a rejected credential (`needs-auth`) from
