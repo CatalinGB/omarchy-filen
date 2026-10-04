@@ -29,7 +29,8 @@ The popup surface: status, quota, recents, and controls. Opened from the bar
 widget.
 
 **Configuration view**:
-The panel's editable Settings section. Writes the plugin's own inline entry in
+The panel surface, opened from its cogwheel, that edits every setting in place
+and writes them to the plugin's own inline entry in
 `~/.config/omarchy/shell.json` (via `updateEntryInline`); the service mirrors the
 mount-affecting keys to `settings.conf` for the systemd units.
 _Avoid_: settings dialog (the shell ships no schema-driven dialog), preferences

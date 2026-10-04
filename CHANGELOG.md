@@ -8,6 +8,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- A cogwheel in the panel opens a full **Settings** view — grouped storage /
+  refresh / panel options plus **Reset to defaults** — with Back or Esc
+  returning to the status view.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added

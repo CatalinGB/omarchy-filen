@@ -130,9 +130,14 @@ Panel {
   // the keys.
   property bool settingsEditing: false
 
+  // Which surface the panel shows: the status/actions view, or the full
+  // configuration view opened from the hero cogwheel.
+  property string view: "main"
+
   // Focusable rows in visual order, skipping whatever is hidden. Files are one
   // section with an inner index, mirroring the Dropbox panel.
   function sectionList() {
+    if (root.view !== "main") return []
     var list = []
     if (mountVisible) list.push("mount")
     if (filesVisible) list.push("files")
@@ -264,6 +269,31 @@ Panel {
     if (hasService) filen.refresh()
   }
 
+  // The hero cogwheel opens the full configuration view; Back/Esc returns to
+  // the status view. Both reset the scroll so each surface starts at its top.
+  function openSettings() {
+    cursorActive = false
+    view = "settings"
+    if (panelFlick) panelFlick.contentY = 0
+  }
+
+  function closeSettings() {
+    view = "main"
+    if (panelFlick) panelFlick.contentY = 0
+  }
+
+  // Restore the manifest defaults for every setting.
+  function resetSettings() {
+    root.persistSettings({
+      mountRoot: "~/Filen",
+      cacheMaxSizeGB: 4,
+      refreshIntervalSec: 15,
+      apiRefreshMin: 10,
+      showLabel: false,
+      showRecents: true
+    })
+  }
+
   // Merge a settings change into this plugin's own shell.json entry and persist
   // it. Applied locally first so the panel redraws on the click itself; the
   // shell re-injects the canonical entry, which BarWidget forwards to the
@@ -305,6 +335,7 @@ Panel {
   function handleOpened() {
     cursorActive = false
     fileIndex = 0
+    view = "main"
     nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
     refresh()
@@ -377,7 +408,10 @@ Panel {
         root.moveCursor(dx, dy)
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
-      onCloseRequested: root.close()
+      onCloseRequested: {
+        if (root.view === "settings") root.closeSettings()
+        else root.close()
+      }
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         var key = String(t).toLowerCase()
@@ -403,6 +437,14 @@ Panel {
           width: panelFlick.width
           spacing: Style.space(12)
 
+          // ---- main view: status, storage, recents, and actions ----
+          Column {
+            id: mainView
+            visible: root.view === "main"
+            height: visible ? implicitHeight : 0
+            width: parent.width
+            spacing: Style.space(12)
+
           PanelHero {
             id: hero
             width: parent.width
@@ -420,13 +462,25 @@ Panel {
               }
             }
             trailingControl: Component {
-              PanelActionButton {
-                iconText: "󰑓"
-                tooltipText: "Refresh status"
-                foreground: root.foreground
-                fontFamily: root.fontFamily
-                enabled: root.hasService && !root.busy
-                onClicked: root.refresh()
+              Row {
+                spacing: Style.space(4)
+
+                PanelActionButton {
+                  iconText: "󰒓"
+                  tooltipText: "Settings"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.openSettings()
+                }
+
+                PanelActionButton {
+                  iconText: "󰑓"
+                  tooltipText: "Refresh status"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  enabled: root.hasService && !root.busy
+                  onClicked: root.refresh()
+                }
               }
             }
           }
@@ -673,76 +727,139 @@ Panel {
             onHoveredIn: root.setSection("updates")
           }
 
-          // ---- settings (editable; writes this plugin's shell.json entry) ----
+          }  // ---- end main view ----
+
+          // ---- settings view: full configuration, opened from the cogwheel ----
           Column {
-            visible: root.hasService
+            id: settingsView
+            visible: root.view === "settings"
+            height: visible ? implicitHeight : 0
             width: parent.width
-            spacing: Style.space(10)
+            spacing: Style.space(12)
+
+            PanelHero {
+              width: parent.width
+              title: "Settings"
+              meta: "Configure Filen"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              trailingControl: Component {
+                PanelActionButton {
+                  iconText: "󰁍"
+                  tooltipText: "Back"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onClicked: root.closeSettings()
+                }
+              }
+            }
+
+            // ---- storage ----
+            Column {
+              width: parent.width
+              spacing: Style.space(10)
+
+              PanelSectionHeader {
+                text: "STORAGE"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              SettingTextRow {
+                label: "Mount folder"
+                value: root.setting("mountRoot", "~/Filen")
+                onCommitted: function(v) { root.persistSettings({ mountRoot: v }) }
+              }
+
+              SettingNumberRow {
+                label: "Cache limit"
+                suffix: "GB"
+                value: root.setting("cacheMaxSizeGB", 4)
+                from: 1
+                to: 512
+                stepSize: 1
+                onCommitted: function(v) { root.persistSettings({ cacheMaxSizeGB: v }) }
+              }
+            }
 
             PanelSeparator { foreground: root.foreground }
 
-            PanelSectionHeader {
-              text: "SETTINGS"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            SettingTextRow {
-              label: "Mount folder"
-              value: root.setting("mountRoot", "~/Filen")
-              onCommitted: function(v) { root.persistSettings({ mountRoot: v }) }
-            }
-
-            SettingNumberRow {
-              label: "Cache limit"
-              suffix: "GB"
-              value: root.setting("cacheMaxSizeGB", 4)
-              from: 1
-              to: 512
-              stepSize: 1
-              onCommitted: function(v) { root.persistSettings({ cacheMaxSizeGB: v }) }
-            }
-
-            SettingNumberRow {
-              label: "Status refresh"
-              suffix: "s"
-              value: root.setting("refreshIntervalSec", 15)
-              from: 5
-              to: 300
-              stepSize: 5
-              onCommitted: function(v) { root.persistSettings({ refreshIntervalSec: v }) }
-            }
-
-            SettingNumberRow {
-              label: "Storage refresh"
-              suffix: "min"
-              value: root.setting("apiRefreshMin", 10)
-              from: 5
-              to: 240
-              stepSize: 5
-              onCommitted: function(v) { root.persistSettings({ apiRefreshMin: v }) }
-            }
-
-            Toggle {
+            // ---- refresh ----
+            Column {
               width: parent.width
-              label: "Show text in bar"
-              description: "Print the mount state next to the bar icon."
-              checked: root.setting("showLabel", false) === true
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              hasCursor: false
-              onClicked: root.persistSettings({ showLabel: !checked })
+              spacing: Style.space(10)
+
+              PanelSectionHeader {
+                text: "REFRESH"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              SettingNumberRow {
+                label: "Status refresh"
+                suffix: "s"
+                value: root.setting("refreshIntervalSec", 15)
+                from: 5
+                to: 300
+                stepSize: 5
+                onCommitted: function(v) { root.persistSettings({ refreshIntervalSec: v }) }
+              }
+
+              SettingNumberRow {
+                label: "Storage refresh"
+                suffix: "min"
+                value: root.setting("apiRefreshMin", 10)
+                from: 5
+                to: 240
+                stepSize: 5
+                onCommitted: function(v) { root.persistSettings({ apiRefreshMin: v }) }
+              }
             }
 
-            Toggle {
+            PanelSeparator { foreground: root.foreground }
+
+            // ---- panel ----
+            Column {
               width: parent.width
-              label: "Show recent files"
-              description: "List recently changed files in the panel. Turn off if you mainly use Filen for backup."
-              checked: root.showRecentsOn
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              hasCursor: false
-              onClicked: root.persistSettings({ showRecents: !checked })
+              spacing: Style.space(10)
+
+              PanelSectionHeader {
+                text: "PANEL"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              Toggle {
+                width: parent.width
+                label: "Show text in bar"
+                description: "Print the mount state next to the bar icon."
+                checked: root.setting("showLabel", false) === true
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                hasCursor: false
+                onClicked: root.persistSettings({ showLabel: !checked })
+              }
+
+              Toggle {
+                width: parent.width
+                label: "Show recent files"
+                description: "List recently changed files in the panel. Turn off if you mainly use Filen for backup."
+                checked: root.showRecentsOn
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                hasCursor: false
+                onClicked: root.persistSettings({ showRecents: !checked })
+              }
+            }
+
+            PanelSeparator { foreground: root.foreground }
+
+            ActionRow {
+              width: parent.width
+              glyph: "󰑓"
+              title: "Reset to defaults"
+              subtitle: "Restore every Filen setting to its default"
+              onTriggered: root.resetSettings()
             }
           }
         }
