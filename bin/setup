@@ -43,9 +43,8 @@ RCLONE_DIR="${DATA_DIR}/rclone"
 UNIT_DIR="${XDG_CONFIG_HOME}/systemd/user"
 CRED_DIR="${XDG_CONFIG_HOME}/credstore.encrypted"
 CREDENTIAL="${CRED_DIR}/filen-auth"
+SETTINGS_FILE="${XDG_CONFIG_HOME}/omarchy-filen/settings.conf"
 
-MOUNT_ROOT="${OMARCHY_FILEN_MOUNT_ROOT:-$HOME/Filen}"
-CACHE_SIZE="${OMARCHY_FILEN_CACHE_SIZE:-4G}"
 RECENTS="${OMARCHY_FILEN_RECENTS:-15}"
 
 RELOAD_NEEDED=0
@@ -64,6 +63,11 @@ usage() {
 Usage: setup [COMMAND]
 
   (no command) / install    Install filen, pre-seed rclone, write units.
+  update | repair           Re-download the pinned filen and regenerate units.
+  settings [KEY=VALUE ...]  Read/modify mount settings; keys are MOUNT_ROOT and
+                            CACHE_SIZE (an rclone size such as 4G).
+  mount-run --config-dir D --auth-config-path P
+                            Internal: source settings, then exec the mount.
   provision                 Sign in and store the encrypted credential.
   uninstall [--purge]       Remove generated units (--purge also credential).
   --uninstall [--purge]     Alias for 'uninstall'.
@@ -171,16 +175,16 @@ systemd_version() {
 # ------------------------------------------------------------- unit render
 
 render_mount_unit() {
-  local rclone_name filen_q rclone_q mount_q
+  local rclone_name setup_q rclone_q
   rclone_name="$(rclone_target)"
-  filen_q="$(systemd_quote "$FILEN_BIN")"
+  setup_q="$(systemd_quote "$SELF")"
   rclone_q="$(systemd_quote "${RCLONE_DIR}/${rclone_name}")"
-  mount_q="$(systemd_quote "$MOUNT_ROOT")"
   cat <<EOF
 $MANAGED_MARKER
 [Unit]
 Description=Filen network drive (managed rclone)
 Documentation=https://github.com/FilenCloudDienste/filen-rs
+ConditionPathExists=%E/credstore.encrypted/filen-auth
 After=graphical-session.target
 PartOf=graphical-session.target
 
@@ -190,7 +194,7 @@ LoadCredentialEncrypted=filen-auth
 RuntimeDirectory=filen
 RuntimeDirectoryMode=0700
 ExecStartPre=/usr/bin/ln -sf $rclone_q %t/filen/$rclone_name
-ExecStart=$filen_q --skip-update --config-dir %t/filen --auth-config-path %d/filen-auth mount --cache-size $CACHE_SIZE $mount_q
+ExecStart=$setup_q mount-run --config-dir %t/filen --auth-config-path %d/filen-auth
 Restart=on-failure
 RestartSec=5
 KillMode=mixed
@@ -212,6 +216,7 @@ $MANAGED_MARKER
 [Unit]
 Description=Filen status fragment (quota and recent files)
 Documentation=https://github.com/FilenCloudDienste/filen-rs
+ConditionPathExists=%E/credstore.encrypted/filen-auth
 After=graphical-session.target
 
 [Service]
@@ -390,8 +395,9 @@ for asset in data.get("assets", []):
 }
 
 install_filen() {
-  if [[ -x "$FILEN_BIN" ]]; then
-    say "filen already installed at $FILEN_BIN (skipping download)."
+  local version_file="${DATA_DIR}/filen.version"
+  if [[ -x "$FILEN_BIN" ]] && [[ "$(cat "$version_file" 2>/dev/null || true)" == "$FILEN_VERSION" ]]; then
+    say "filen ${FILEN_VERSION} already installed at $FILEN_BIN (skipping download)."
     return 0
   fi
   local asset url digest actual tmp
@@ -416,6 +422,7 @@ install_filen() {
   fi
   chmod 0755 "$tmp"
   mv "$tmp" "$FILEN_BIN"
+  printf '%s\n' "$FILEN_VERSION" > "$version_file"
   say "Installed filen ${FILEN_VERSION} at ${FILEN_BIN}."
 }
 
@@ -459,6 +466,88 @@ PY
   say "Pre-seeded rclone at ${RCLONE_DIR}/${target}."
 }
 
+# --------------------------------------------------------------- settings
+
+# Source the settings file (if any) over env-provided defaults, then expand a
+# leading ~ in MOUNT_ROOT. Sets MOUNT_ROOT and CACHE_SIZE.
+load_settings() {
+  MOUNT_ROOT="${OMARCHY_FILEN_MOUNT_ROOT:-$HOME/Filen}"
+  CACHE_SIZE="${OMARCHY_FILEN_CACHE_SIZE:-4G}"
+  if [[ -f "$SETTINGS_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$SETTINGS_FILE"
+  fi
+  case "$MOUNT_ROOT" in
+    "~")   MOUNT_ROOT="$HOME" ;;
+    "~/"*) MOUNT_ROOT="${HOME}/${MOUNT_ROOT#\~/}" ;;
+  esac
+}
+
+# Double-quote a value so the settings file stays shell-sourceable.
+shell_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//\$/\\\$}"
+  value="${value//\`/\\\`}"
+  printf '"%s"' "$value"
+}
+
+write_settings() {
+  local dir tmp
+  dir="$(dirname "$SETTINGS_FILE")"
+  mkdir -p "$dir"
+  tmp="$(mktemp "${dir}/.settings.conf.XXXXXX")"
+  {
+    printf '%s\n' "$MANAGED_MARKER"
+    printf 'MOUNT_ROOT=%s\n' "$(shell_quote "$MOUNT_ROOT")"
+    printf 'CACHE_SIZE=%s\n' "$(shell_quote "$CACHE_SIZE")"
+  } > "$tmp"
+  chmod 0600 "$tmp"
+  mv "$tmp" "$SETTINGS_FILE"
+  say "Wrote settings to $SETTINGS_FILE"
+}
+
+cmd_settings() {
+  load_settings
+  local pair key value
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    value="${pair#*=}"
+    case "$key" in
+      MOUNT_ROOT) MOUNT_ROOT="$value" ;;
+      CACHE_SIZE) CACHE_SIZE="$value" ;;
+      *) die "settings: unknown key: ${key:-$pair} (expected MOUNT_ROOT=... or CACHE_SIZE=...)" ;;
+    esac
+  done
+  write_settings
+}
+
+# Internal: sourced from the settings file, then exec the mount. --print is a
+# side-effect-free dry run used only by the test suite.
+cmd_mount_run() {
+  local config_dir="" auth="" print_only=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --config-dir)       config_dir="${2:?--config-dir needs a value}"; shift 2 ;;
+      --auth-config-path) auth="${2:?--auth-config-path needs a value}"; shift 2 ;;
+      --print|--dry-run)  print_only=1; shift ;;
+      *) die "mount-run: unknown argument: $1" ;;
+    esac
+  done
+  [[ -n "$config_dir" ]] || die "mount-run: --config-dir is required"
+  [[ -n "$auth" ]] || die "mount-run: --auth-config-path is required"
+  load_settings
+  if (( print_only )); then
+    printf '%s\n' \
+      "$FILEN_BIN" --skip-update --config-dir "$config_dir" --auth-config-path "$auth" \
+      mount --cache-size "$CACHE_SIZE" "$MOUNT_ROOT"
+    return 0
+  fi
+  exec "$FILEN_BIN" --skip-update --config-dir "$config_dir" --auth-config-path "$auth" \
+    mount --cache-size "$CACHE_SIZE" "$MOUNT_ROOT"
+}
+
 # --------------------------------------------------------------- commands
 
 cmd_install() {
@@ -466,6 +555,10 @@ cmd_install() {
   precheck_units
   install_filen
   seed_rclone
+  if [[ ! -f "$SETTINGS_FILE" ]]; then
+    load_settings
+    write_settings
+  fi
   install_units
   if [[ ! -f "$CREDENTIAL" ]]; then
     say "Next: run '$(basename "$SELF") provision' in a terminal to sign in to Filen."
@@ -516,6 +609,17 @@ cmd_provision() {
   trap - EXIT
   rm -rf "$tmp"
   say "Stored the encrypted credential at ${CREDENTIAL}."
+
+  if have systemctl; then
+    if systemctl --user enable --now filen-mount.service; then
+      say "Enabled and started filen-mount.service: mounted now and at login."
+    else
+      warn "could not enable filen-mount.service; start it from the panel or run"
+      warn "  systemctl --user enable --now filen-mount.service"
+    fi
+  else
+    warn "systemctl not found; filen-mount.service was not enabled"
+  fi
 }
 
 cmd_uninstall() {
@@ -677,6 +781,9 @@ main() {
   shift || true
   case "$command" in
     install|"")        cmd_install "$@" ;;
+    update|repair)     cmd_install "$@" ;;
+    settings)          cmd_settings "$@" ;;
+    mount-run)         cmd_mount_run "$@" ;;
     provision)         cmd_provision "$@" ;;
     uninstall|--uninstall) cmd_uninstall "${1:-}" ;;
     check|doctor)      cmd_check ;;

@@ -83,6 +83,10 @@ class Harness:
     def credential(self):
         return self.config / "credstore.encrypted" / "filen-auth"
 
+    @property
+    def settings_file(self):
+        return self.config / "omarchy-filen" / "settings.conf"
+
     def _install_fakes(self):
         write_exec(
             self.fake_bin / "systemctl",
@@ -102,6 +106,7 @@ class Harness:
         target = self.run("rclone-target").stdout.strip()
         write_exec(self.filen_bin, "#!/usr/bin/env bash\nexit 0\n")
         write_exec(self.data_dir / "rclone" / target, "#!/usr/bin/env bash\nexit 0\n")
+        (self.data_dir / "filen.version").write_text("0.2.8\n", encoding="utf-8")
 
     def calls(self):
         if not self.exec_log.exists():
@@ -183,22 +188,24 @@ class SetupTest(unittest.TestCase):
             "RuntimeDirectory=filen",
             "RuntimeDirectoryMode=0700",
             "LoadCredentialEncrypted=filen-auth",
-            "--config-dir %t/filen",
-            "--auth-config-path %d/filen-auth",
-            "mount --cache-size 4G",
+            "ConditionPathExists=%E/credstore.encrypted/filen-auth",
+            "mount-run --config-dir %t/filen --auth-config-path %d/filen-auth",
             "ExecStartPre=/usr/bin/ln -sf",
         ):
             self.assertIn(token, unit)
         rclone = self.h.run("rclone-target").stdout.strip()
         self.assertIn(f"%t/filen/{rclone}", unit)
-        self.assertIn(str(self.h.home / "Filen"), unit)
-        self.assertIn(str(self.h.filen_bin), unit)
+        # The mount root and cache size are now live settings, not baked in.
+        self.assertNotIn("--cache-size", unit)
+        self.assertNotIn(str(self.h.home / "Filen"), unit)
+        self.assertIn(str(SETUP), unit)
 
     def test_status_unit_render(self):
         unit = self.h.run("render-unit", "filen-status.service").stdout
         self.assertIn(MARKER, unit)
         self.assertIn("Type=oneshot", unit)
         self.assertIn("LoadCredentialEncrypted=filen-auth", unit)
+        self.assertIn("ConditionPathExists=%E/credstore.encrypted/filen-auth", unit)
         self.assertIn("export-fragment", unit)
         self.assertIn("--out %t/filen/api-status.json", unit)
         self.assertIn("ExecStartPre=/usr/bin/mkdir -p %t/filen", unit)
@@ -215,6 +222,92 @@ class SetupTest(unittest.TestCase):
 
     def test_unknown_unit_is_rejected(self):
         self.assertNotEqual(self.h.run("render-unit", "definitely-not-a-unit").returncode, 0)
+
+    # -------------------------------------------------------------- settings
+
+    def test_settings_round_trip_writes_marker_and_mode(self):
+        root = self.h.tmp / "custom-root"
+        result = self.h.run("settings", f"MOUNT_ROOT={root}", "CACHE_SIZE=2G")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.h.settings_file.exists())
+        self.assertEqual(self.h.settings_file.stat().st_mode & 0o777, 0o600)
+        text = self.h.settings_file.read_text(encoding="utf-8")
+        self.assertIn(MARKER, text)
+        self.assertIn(f'MOUNT_ROOT="{root}"', text)
+        self.assertIn('CACHE_SIZE="2G"', text)
+
+    def test_settings_preserves_unspecified_keys(self):
+        root = self.h.tmp / "root"
+        self.h.run("settings", f"MOUNT_ROOT={root}", "CACHE_SIZE=2G")
+
+        result = self.h.run("settings", "CACHE_SIZE=8G")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = self.h.settings_file.read_text(encoding="utf-8")
+        self.assertIn(f'MOUNT_ROOT="{root}"', text)
+        self.assertIn('CACHE_SIZE="8G"', text)
+
+    def test_settings_defaults_when_file_missing(self):
+        result = self.h.run("settings")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = self.h.settings_file.read_text(encoding="utf-8")
+        self.assertIn(f'MOUNT_ROOT="{self.h.home / "Filen"}"', text)
+        self.assertIn('CACHE_SIZE="4G"', text)
+
+    def test_settings_rejects_unknown_key(self):
+        result = self.h.run("settings", "NOPE=1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unknown key", result.stderr)
+
+    def test_mount_run_argument_construction(self):
+        root = self.h.tmp / "mount-root"
+        self.h.run("settings", f"MOUNT_ROOT={root}", "CACHE_SIZE=2G")
+
+        result = self.h.run(
+            "mount-run",
+            "--print",
+            "--config-dir",
+            "/run/user/1000/filen",
+            "--auth-config-path",
+            "/run/creds/filen-auth",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.splitlines(),
+            [
+                str(self.h.filen_bin),
+                "--skip-update",
+                "--config-dir",
+                "/run/user/1000/filen",
+                "--auth-config-path",
+                "/run/creds/filen-auth",
+                "mount",
+                "--cache-size",
+                "2G",
+                str(root),
+            ],
+        )
+
+    def test_mount_run_expands_leading_tilde(self):
+        self.h.run("settings", "MOUNT_ROOT=~/Cloud", "CACHE_SIZE=4G")
+
+        result = self.h.run(
+            "mount-run",
+            "--print",
+            "--config-dir",
+            "/tmp/cfg",
+            "--auth-config-path",
+            "/tmp/auth",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines()[-1], str(self.h.home / "Cloud"))
+
+    def test_mount_run_requires_config_dir_and_auth(self):
+        result = self.h.run("mount-run", "--print", "--config-dir", "/tmp/cfg")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--auth-config-path is required", result.stderr)
 
     # ---------------------------------------------------------------- install
 
@@ -249,6 +342,52 @@ class SetupTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("refusing", result.stderr)
         self.assertEqual(foreign.read_text(encoding="utf-8"), original)
+
+    def test_install_skips_download_when_version_marker_matches(self):
+        self.h.seed_binaries()
+
+        result = self.h.run("install")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("curl", "\n".join(self.h.calls()))
+        self.assertEqual(
+            (self.h.data_dir / "filen.version").read_text(encoding="utf-8").strip(),
+            "0.2.8",
+        )
+
+    def test_install_redownloads_when_version_marker_differs(self):
+        self.h.seed_binaries()
+        (self.h.data_dir / "filen.version").write_text("0.2.0\n", encoding="utf-8")
+
+        result = self.h.run("install")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("curl", "\n".join(self.h.calls()))
+
+    def test_install_writes_default_settings(self):
+        self.h.seed_binaries()
+
+        result = self.h.run("install")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.h.settings_file.exists())
+
+    def test_update_dispatches_install(self):
+        self.h.seed_binaries()
+
+        result = self.h.run("update")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ("filen-mount.service", "filen-status.service", "filen-status.timer"):
+            self.assertTrue((self.h.unit_dir / name).exists(), name)
+
+    def test_repair_is_an_update_alias(self):
+        self.h.seed_binaries()
+
+        result = self.h.run("repair")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.h.unit_dir / "filen-mount.service").exists())
 
     # -------------------------------------------------------------- uninstall
 

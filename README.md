@@ -28,7 +28,7 @@ The plugin detects anything missing and offers to install it.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/<you>/omarchy-filen.git --enable
+omarchy plugin add https://github.com/CatalinGB/omarchy-filen.git --enable
 ```
 
 Omarchy clones the repository into `~/.config/omarchy/plugins/filen.storage/`,
@@ -37,17 +37,17 @@ permissions — review the source before accepting the prompt.
 
 ## Set up (once)
 
-Click the Filen icon in the bar → **Set up**. A terminal opens and walks you
-through the one-time steps:
+Setting up Filen is two steps. Click the Filen icon in the bar:
 
-1. Installs the pinned `filen` binary and pre-seeds rclone.
-2. Writes and loads the systemd units.
-3. Prompts you to log in to Filen (email / password / two-factor).
-4. Encrypts that credential into a machine-bound **systemd credential** and
-   shreds the plaintext.
+1. **Install Filen** (shown first) — downloads the pinned `filen` binary,
+   pre-seeds rclone, and writes and loads the systemd units.
+2. **Set up Filen** — opens a terminal and walks you through signing in to Filen
+   (email / password / two-factor). That credential is encrypted into a
+   machine-bound **systemd credential** and the plaintext is shredded.
 
-After that, your drive mounts at login and the panel works — **no repeated
-login**, no password ever typed into the panel.
+Once **Set up** finishes, the drive is enabled to mount at login and is mounted
+immediately. From then on it comes up at login — **no repeated login**, and no
+password is ever typed into the panel.
 
 ## Using the panel
 
@@ -71,11 +71,15 @@ Right-click the bar widget → **Settings**, or edit the entry in
 
 | Setting | Default | Notes |
 |---|---|---|
-| Mount folder | `~/Filen` | Where Filen appears |
-| Cache size limit | 4 GB | Upper bound on the RAM-backed VFS cache (see below) |
+| Mount folder | `~/Filen` | Where Filen appears; changing it restarts the mount |
+| Cache size limit | 4 GB | Upper bound on the RAM-backed VFS cache (see below); changing it restarts the mount |
 | Status refresh | 15 s | Local-only check; cheap |
 | Storage/recents refresh | 10 min | Network calls; keep it slow |
 | Show text in bar | off | Prints state next to the icon |
+
+Changing **Mount folder** or **Cache size limit** is a live change: it rewrites
+`~/.config/omarchy-filen/settings.conf` and restarts the mount. The other
+settings take effect on the next poll.
 
 ## Where things live
 
@@ -84,6 +88,8 @@ Right-click the bar widget → **Settings**, or edit the entry in
 | `~/Filen/` | Your mounted Filen drive |
 | `~/.config/credstore.encrypted/filen-auth` | The encrypted credential (the only persistent copy) |
 | `~/.local/share/omarchy-filen/` | The managed `filen` binary and rclone |
+| `~/.local/share/omarchy-filen/filen.version` | Version marker for the managed `filen` binary |
+| `~/.config/omarchy-filen/settings.conf` | Live mount settings (mount folder, cache limit) |
 | `~/.config/systemd/user/filen-mount.service` | The mount unit |
 | `~/.config/systemd/user/filen-status.{timer,service}` | The slow status/recents timer |
 | `$XDG_RUNTIME_DIR/filen/` | tmpfs: mount point config, `rclone.conf`, VFS cache, status |
@@ -102,6 +108,8 @@ Helpers stay inside the installed plugin rather than modifying your `PATH`:
 PLUGIN="$HOME/.config/omarchy/plugins/filen.storage"
 
 "$PLUGIN/bin/setup"                       # install / repair / re-provision
+"$PLUGIN/bin/setup" provision             # sign in and store the credential
+"$PLUGIN/bin/setup" update                # refresh the pinned filen binary and units
 "$PLUGIN/bin/status"                      # the panel's JSON
 systemctl --user status filen-mount.service
 systemctl --user restart filen-mount.service
@@ -134,6 +142,14 @@ omarchy plugin remove filen.storage
 ```
 
 Uninstalling never touches anything stored in Filen.
+
+## Docs
+
+- [docs/status-contract.md](docs/status-contract.md) — the status JSON and CLI
+  invocation contract the panel consumes.
+- [docs/prerequisites.md](docs/prerequisites.md) — what the plugin installs and
+  who owns it.
+- [SECURITY.md](SECURITY.md) — the security model.
 
 ## License
 

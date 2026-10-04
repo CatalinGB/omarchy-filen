@@ -69,7 +69,7 @@ Panel {
   readonly property real usageFraction: hasService ? Model.usageFraction(filen) : 0
 
   // Visibility rules for the action rows, per the ticket.
-  readonly property bool mountVisible: installed
+  readonly property bool mountVisible: installed && authenticated
   readonly property bool filesVisible: installed && remoteFiles.length > 0
   readonly property bool setupVisible: installed
   readonly property bool installVisible: hasService && !installed

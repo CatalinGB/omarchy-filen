@@ -46,6 +46,15 @@ Item {
   // poll". Mirrors the cloud/dropbox services' pending-state handling.
   property string _pendingState: ""
 
+  // The mount settings last written to settings.conf; a re-push of the same
+  // pair is a no-op. `-1` makes the first push (Component.onCompleted) land.
+  property string _pushedMountRoot: ""
+  property int _pushedCacheMaxSizeGB: -1
+  // The first push only mirrors settings to disk; a live mount is restarted
+  // solely for a change made after that, so a shell start / hot-reload never
+  // drops the user's mount.
+  property bool _settingsInitialized: false
+
   readonly property string state: _pendingState !== ""
     ? _pendingState
     : Model.stateFor({ ok: ok, installed: installed, authenticated: authenticated, unitState: unitState, running: running })
@@ -65,6 +74,7 @@ Item {
   }
 
   readonly property string mountRoot: String(setting("mountRoot", "~/Filen"))
+  readonly property int cacheMaxSizeGB: intSetting("cacheMaxSizeGB", 4, 1, 512)
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 15, 5, 300)
   readonly property int apiRefreshMin: intSetting("apiRefreshMin", 10, 5, 240)
   readonly property bool showLabel: setting("showLabel", false) === true
@@ -168,6 +178,31 @@ Item {
     runControl([on ? "enable" : "disable", "filen-mount.service"], "Could not change the login setting")
   }
 
+  // ---------------------------------------------------------------- settings push
+  //
+  // The mount unit reads settings.conf once, at start, so an edit only takes
+  // effect on the next start. Debounce edits (and the startup push) into one
+  // write, then restart a live mount so the new flags apply now.
+  function pushMountSettings() {
+    mountSettingsTimer.restart()
+  }
+
+  function flushMountSettings() {
+    if (mountRoot === _pushedMountRoot && cacheMaxSizeGB === _pushedCacheMaxSizeGB) return
+    if (settingsProcess.running) {
+      // A push is already in flight; re-check once it lands.
+      mountSettingsTimer.restart()
+      return
+    }
+    // Snapshot what this run carries so a settings change landing mid-flight
+    // is not recorded as applied.
+    settingsProcess.appliedMountRoot = mountRoot
+    settingsProcess.appliedCacheMaxSizeGB = cacheMaxSizeGB
+    settingsProcess.command = ["bash", setupScript, "settings",
+      "MOUNT_ROOT=" + mountRoot, "CACHE_SIZE=" + cacheMaxSizeGB + "G"]
+    settingsProcess.running = true
+  }
+
   // ---------------------------------------------------------------- timers
 
   Timer {
@@ -223,6 +258,15 @@ Item {
     onTriggered: root.actionStatus = ""
   }
 
+  Timer {
+    // Restart-on-change debounce: each settings edit resets the 800ms window,
+    // so only the final values are written.
+    id: mountSettingsTimer
+    interval: 800
+    repeat: false
+    onTriggered: root.flushMountSettings()
+  }
+
   // ---------------------------------------------------------------- processes
 
   Process {
@@ -259,8 +303,40 @@ Item {
     }
   }
 
+  Process {
+    id: settingsProcess
+    // What this run writes; recorded as applied only once it exits cleanly.
+    property string appliedMountRoot: ""
+    property int appliedCacheMaxSizeGB: 0
+    running: false
+    command: []
+    stdout: StdioCollector { id: settingsOut; waitForEnd: true }
+    stderr: StdioCollector { id: settingsErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        var reason = String(settingsErr.text || settingsOut.text || "").trim()
+        root.lastError = ("Could not apply mount settings" + (reason ? ": " + reason : "")).substring(0, 200)
+        return
+      }
+      var first = !root._settingsInitialized
+      root._pushedMountRoot = appliedMountRoot
+      root._pushedCacheMaxSizeGB = appliedCacheMaxSizeGB
+      root._settingsInitialized = true
+      // The unit read the old flags at start, so a live mount needs a restart —
+      // but only for a change made after the initial mirror; a shell start must
+      // not restart an existing mount. A stopped unit picks flags up on start.
+      if (!first && root.running) root.restart()
+    }
+  }
+
+  // A settings edit re-runs the debounced push; skip if the pair is unchanged.
+  onMountRootChanged: pushMountSettings()
+  onCacheMaxSizeGBChanged: pushMountSettings()
+
   // Nothing destructive: the startup poll is timer-driven (`triggeredOnStart`).
   // This service never authenticates, never reads the credential, and never
   // runs `filen`; it only probes local state and drives `systemctl --user`.
-  Component.onCompleted: {}
+  // The initial push only mirrors settings to disk (`_settingsInitialized`
+  // gates the restart), so a shell start never drops an existing mount.
+  Component.onCompleted: pushMountSettings()
 }
