@@ -1,0 +1,8 @@
+# Working tracker: wayfinder map, decision tickets, research, implementation graph.
+.scratch/
+# Python
+__pycache__/
+*.pyc
+# Editor / OS
+*.swp
+.DS_Store
