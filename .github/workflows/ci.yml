@@ -33,7 +33,8 @@ jobs:
         run: |
           if command -v shellcheck >/dev/null 2>&1; then
             # bin/status is Python, so shellcheck only sees the shell scripts.
-            shellcheck bin/setup tests/e2e/live.sh
+            # Fail on warnings/errors; info-level notes vary by shellcheck version.
+            shellcheck --severity=warning bin/setup tests/e2e/live.sh
           else
             echo "shellcheck not installed; skipping"
           fi

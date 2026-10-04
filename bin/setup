@@ -135,7 +135,7 @@ rclone_target() {
 }
 
 rclone_checksum() {
-  case "$(rclone_arch_label "$@")" in
+  case "$(rclone_arch_label)" in
     amd64) printf '%s\n' "$RCLONE_CHECKSUM_LINUX_AMD64" ;;
     arm64) printf '%s\n' "$RCLONE_CHECKSUM_LINUX_ARM64" ;;
   esac
@@ -596,6 +596,8 @@ load_settings() {
     # shellcheck disable=SC1090
     source "$SETTINGS_FILE"
   fi
+  # "~/" below is a literal match, not a tilde to expand.
+  # shellcheck disable=SC2088
   case "$MOUNT_ROOT" in
     "~")   MOUNT_ROOT="$HOME" ;;
     "~/"*) MOUNT_ROOT="${HOME}/${MOUNT_ROOT#\~/}" ;;
@@ -677,7 +679,7 @@ cmd_mount_run() {
   # mount; clear that before mounting. A live mount is skipped (mountpoint -q
   # succeeds), so this never unmounts a healthy drive.
   if ! mountpoint -q "$MOUNT_ROOT" 2>/dev/null; then
-    have fusermount3 && fusermount3 -uz "$MOUNT_ROOT" 2>/dev/null || true
+    if have fusermount3; then fusermount3 -uz "$MOUNT_ROOT" 2>/dev/null || true; fi
   fi
   # filen-rs looks for its managed rclone at
   #   <config-dir>/rclone/<rclone-name>
@@ -738,7 +740,7 @@ cmd_provision() {
   plaintext=""
   mkdir -p "$config"
   cleanup_provision() {
-    [[ -n "$plaintext" && -f "$plaintext" ]] && shred -u "$plaintext" 2>/dev/null || true
+    if [[ -n "$plaintext" && -f "$plaintext" ]]; then shred -u "$plaintext" 2>/dev/null || true; fi
     rm -rf "$tmp"
   }
   trap cleanup_provision EXIT
@@ -794,7 +796,7 @@ cmd_uninstall() {
     [[ -e "$file" || -L "$file" ]] || continue
     unit_file_is_managed "$file" ||
       die "refusing to remove a unit not owned by ${PLUGIN_ID}: $file"
-    have systemctl && systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+    if have systemctl; then systemctl --user disable --now "$unit" >/dev/null 2>&1 || true; fi
     rm -f "$file"
     say "Removed $file"
   done
@@ -806,7 +808,7 @@ cmd_uninstall() {
   # dead while the kernel still holds the mount, which `mountpoint -q` cannot
   # reliably report (it stats, which fails). A no-op when nothing is mounted.
   if [[ -n "$mount_root" ]]; then
-    have fusermount3 && fusermount3 -uz "$mount_root" 2>/dev/null || true
+    if have fusermount3; then fusermount3 -uz "$mount_root" 2>/dev/null || true; fi
   fi
   rm -rf "${XDG_RUNTIME_DIR}/filen" 2>/dev/null || true
 
