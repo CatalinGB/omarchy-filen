@@ -24,7 +24,7 @@ set -euo pipefail
 
 PLUGIN_ID="filen.storage"
 MANAGED_MARKER="# Managed by the filen.storage Omarchy plugin; do not edit."
-FILEN_VERSION="0.2.8"
+FILEN_VERSION="0.2.9"
 FILEN_RELEASES_REPO="FilenCloudDienste/filen-cli-releases"
 RCLONE_VERSION="1.74.2"
 # Embedded from filen-rclone-wrapper/src/rclone_installation.rs (v0.2.8).
@@ -49,7 +49,7 @@ RECENTS="${OMARCHY_FILEN_RECENTS:-15}"
 
 RELOAD_NEEDED=0
 
-PLUGIN_UNITS=("filen-mount.service" "filen-status.service" "filen-status.timer")
+PLUGIN_UNITS=("omarchy-filen-mount.service" "filen-status.service" "filen-status.timer")
 
 # ------------------------------------------------------------------ output
 
@@ -244,7 +244,7 @@ EOF
 
 render_unit() {
   case "${1:-}" in
-    filen-mount|filen-mount.service)       render_mount_unit ;;
+    filen-mount|omarchy-filen-mount.service)       render_mount_unit ;;
     filen-status.service|status-service)   render_status_unit ;;
     filen-status.timer|status-timer)       render_status_timer ;;
     *) die "unknown unit: ${1:-} (mount|status-service|status-timer)" ;;
@@ -302,7 +302,7 @@ precheck_units() {
 
 install_units() {
   RELOAD_NEEDED=0
-  write_unit "filen-mount.service"   "$(render_mount_unit)"
+  write_unit "omarchy-filen-mount.service"   "$(render_mount_unit)"
   write_unit "filen-status.service"  "$(render_status_unit)"
   write_unit "filen-status.timer"    "$(render_status_timer)"
   if (( RELOAD_NEEDED )); then
@@ -620,14 +620,14 @@ cmd_provision() {
   say "Stored the encrypted credential at ${CREDENTIAL}."
 
   if have systemctl; then
-    if systemctl --user enable --now filen-mount.service; then
-      say "Enabled and started filen-mount.service: mounted now and at login."
+    if systemctl --user enable --now omarchy-filen-mount.service; then
+      say "Enabled and started omarchy-filen-mount.service: mounted now and at login."
     else
-      warn "could not enable filen-mount.service; start it from the panel or run"
-      warn "  systemctl --user enable --now filen-mount.service"
+      warn "could not enable omarchy-filen-mount.service; start it from the panel or run"
+      warn "  systemctl --user enable --now omarchy-filen-mount.service"
     fi
   else
-    warn "systemctl not found; filen-mount.service was not enabled"
+    warn "systemctl not found; omarchy-filen-mount.service was not enabled"
   fi
 }
 
@@ -638,7 +638,7 @@ cmd_uninstall() {
   mount_root="$MOUNT_ROOT"
 
   precheck_units
-  for unit in filen-status.timer filen-status.service filen-mount.service; do
+  for unit in filen-status.timer filen-status.service omarchy-filen-mount.service; do
     file="${UNIT_DIR}/${unit}"
     [[ -e "$file" || -L "$file" ]] || continue
     unit_file_is_managed "$file" ||

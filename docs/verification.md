@@ -23,7 +23,7 @@ login session; they cannot be exercised headlessly. Run them once after install:
    terminal; confirm `~/.config/credstore.encrypted/filen-auth` exists and no
    plaintext remains (`grep -r <canary>` finds nothing; the temp export was
    shredded).
-2. **Mount** — `~/Filen` appears; `systemctl --user status filen-mount.service`
+2. **Mount** — `~/Filen` appears; `systemctl --user status omarchy-filen-mount.service`
    is `active`; `rclone.conf` exists only under `$XDG_RUNTIME_DIR/filen/` and
    **not** on persistent disk.
 3. **Resilience** — `omarchy restart shell` and a plugin hot-reload do **not**

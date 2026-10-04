@@ -90,7 +90,7 @@ settings take effect on the next poll.
 | `~/.local/share/omarchy-filen/` | The managed `filen` binary and rclone |
 | `~/.local/share/omarchy-filen/filen.version` | Version marker for the managed `filen` binary |
 | `~/.config/omarchy-filen/settings.conf` | Live mount settings (mount folder, cache limit) |
-| `~/.config/systemd/user/filen-mount.service` | The mount unit |
+| `~/.config/systemd/user/omarchy-filen-mount.service` | The mount unit |
 | `~/.config/systemd/user/filen-status.{timer,service}` | The slow status/recents timer |
 | `$XDG_RUNTIME_DIR/filen/` | tmpfs: mount point config, `rclone.conf`, VFS cache, status |
 | `~/.config/omarchy/shell.json` | Bar layout and plugin settings |
@@ -111,9 +111,9 @@ PLUGIN="$HOME/.config/omarchy/plugins/filen.storage"
 "$PLUGIN/bin/setup" provision             # sign in and store the credential
 "$PLUGIN/bin/setup" update                # refresh the pinned filen binary and units
 "$PLUGIN/bin/status"                      # the panel's JSON
-systemctl --user status filen-mount.service
-systemctl --user restart filen-mount.service
-journalctl --user -u filen-mount.service -f
+systemctl --user status omarchy-filen-mount.service
+systemctl --user restart omarchy-filen-mount.service
+journalctl --user -u omarchy-filen-mount.service -f
 ```
 
 ## Open from the Omarchy menu (optional)
@@ -126,7 +126,7 @@ into `~/.config/omarchy/extensions/omarchy-menu.jsonc` to add Filen entries
 
 - **Sign-in needed** — your credential is missing or was rejected (often after a
   password change). Run **Set up** again.
-- **Mount failed** — `journalctl --user -u filen-mount.service`. A stale FUSE
+- **Mount failed** — `journalctl --user -u omarchy-filen-mount.service`. A stale FUSE
   mount is cleaned automatically on the next start.
 - **Bar icon dim** — the service is stopped; use **Mount**.
 - **Filen shows unavailable** — check `systemd-creds` support (`systemd-creds

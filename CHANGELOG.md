@@ -14,7 +14,7 @@ and this project adheres to
   Filen mount status, storage quota, and recent files.
 - Two-step panel setup: **Install Filen** (pinned `filen` binary, rclone, and
   systemd units) then **Set up Filen** (sign in and store the credential).
-- A systemd-supervised FUSE mount (`filen-mount.service`) plus a credentialed
+- A systemd-supervised FUSE mount (`omarchy-filen-mount.service`) plus a credentialed
   `filen-status.{timer,service}` producer; the panel stays credential-free.
 - A machine-bound **systemd credential** at
   `~/.config/credstore.encrypted/filen-auth`; plaintext is shredded and keys

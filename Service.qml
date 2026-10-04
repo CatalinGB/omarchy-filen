@@ -10,7 +10,7 @@ import "Model.js" as Model
 // two-monitor setup must not double the work.
 //
 // The service deliberately owns no mount and no credential. `filen mount` runs
-// under systemd (filen-mount.service), because a mount parented to the shell
+// under systemd (omarchy-filen-mount.service), because a mount parented to the shell
 // process would be torn down by `omarchy restart shell` and by every plugin
 // hot-reload, taking open files with it. Everything here is therefore a read
 // of local, non-secret state, or a short-lived `systemctl --user` command.
@@ -146,7 +146,7 @@ Item {
     _pendingState = "mounting"
     actionStatus = "Mounting…"
     actionStatusTimer.restart()
-    runControl(["start", "filen-mount.service"], "Could not mount Filen")
+    runControl(["start", "omarchy-filen-mount.service"], "Could not mount Filen")
   }
 
   function unmount() {
@@ -154,7 +154,7 @@ Item {
     _pendingState = "stopped"
     actionStatus = "Unmounting…"
     actionStatusTimer.restart()
-    runControl(["stop", "filen-mount.service"], "Could not unmount Filen")
+    runControl(["stop", "omarchy-filen-mount.service"], "Could not unmount Filen")
   }
 
   function restart() {
@@ -162,7 +162,7 @@ Item {
     _pendingState = "mounting"
     actionStatus = "Restarting…"
     actionStatusTimer.restart()
-    runControl(["restart", "filen-mount.service"], "Could not restart Filen")
+    runControl(["restart", "omarchy-filen-mount.service"], "Could not restart Filen")
   }
 
   function toggleMount() {
@@ -175,7 +175,7 @@ Item {
   // stays in mount()/unmount().
   function setAutoMount(on) {
     if (controlProcess.running) return
-    runControl([on ? "enable" : "disable", "filen-mount.service"], "Could not change the login setting")
+    runControl([on ? "enable" : "disable", "omarchy-filen-mount.service"], "Could not change the login setting")
   }
 
   // ---------------------------------------------------------------- settings push

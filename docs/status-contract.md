@@ -96,7 +96,7 @@ Failure document (the service always writes valid JSON):
 | `statusText` | service | human string (e.g. `Mounted`, `Sign-in needed`, `Stopped`) |
 | `mountPath` | settings | the local mount root (`~/Filen` default) |
 | `unitState` | `systemctl --user show` | `active`/`inactive`/`failed` |
-| `autoMount` | `systemctl --user is-enabled filen-mount.service` | `true` when the unit is enabled to start at login; absent/disabled ⇒ `false` |
+| `autoMount` | `systemctl --user is-enabled omarchy-filen-mount.service` | `true` when the unit is enabled to start at login; absent/disabled ⇒ `false` |
 | `plan` | — | `null`; the CLI exposes no plan (SDK only) |
 | `usedBytes` | `stat /` → `usedStorage` | |
 | `quotaBytes` | `stat /` → `totalStorage` | |

@@ -319,7 +319,7 @@ class SetupTest(unittest.TestCase):
         rendered = {path.name: path.read_text(encoding="utf-8") for path in self.h.unit_dir.iterdir()}
         self.assertEqual(
             set(rendered),
-            {"filen-mount.service", "filen-status.service", "filen-status.timer"},
+            {"omarchy-filen-mount.service", "filen-status.service", "filen-status.timer"},
         )
         for name, body in rendered.items():
             self.assertIn(MARKER, body, name)
@@ -333,7 +333,7 @@ class SetupTest(unittest.TestCase):
     def test_install_refuses_foreign_unit(self):
         self.h.seed_binaries()
         self.h.unit_dir.mkdir(parents=True, exist_ok=True)
-        foreign = self.h.unit_dir / "filen-mount.service"
+        foreign = self.h.unit_dir / "omarchy-filen-mount.service"
         original = "# someone else's unit\n[Service]\n"
         foreign.write_text(original, encoding="utf-8")
 
@@ -378,7 +378,7 @@ class SetupTest(unittest.TestCase):
         result = self.h.run("update")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        for name in ("filen-mount.service", "filen-status.service", "filen-status.timer"):
+        for name in ("omarchy-filen-mount.service", "filen-status.service", "filen-status.timer"):
             self.assertTrue((self.h.unit_dir / name).exists(), name)
 
     def test_repair_is_an_update_alias(self):
@@ -387,7 +387,7 @@ class SetupTest(unittest.TestCase):
         result = self.h.run("repair")
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.h.unit_dir / "filen-mount.service").exists())
+        self.assertTrue((self.h.unit_dir / "omarchy-filen-mount.service").exists())
 
     # -------------------------------------------------------------- uninstall
 
@@ -441,7 +441,7 @@ class SetupTest(unittest.TestCase):
 
     def test_uninstall_refuses_foreign_unit(self):
         self.h.unit_dir.mkdir(parents=True, exist_ok=True)
-        foreign = self.h.unit_dir / "filen-mount.service"
+        foreign = self.h.unit_dir / "omarchy-filen-mount.service"
         foreign.write_text("# someone else's unit\n", encoding="utf-8")
 
         result = self.h.run("uninstall")
