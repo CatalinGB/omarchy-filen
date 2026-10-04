@@ -99,6 +99,13 @@ Panel {
 
   // ---------------------------------------------------------------- cursor
 
+  // Keyboard cursor state. Declared (not left dynamic) so the change handlers
+  // and the `root.focusSection`/`root.fileIndex`/`root.cursorActive` bindings
+  // re-evaluate and highlight the focused row.
+  property string focusSection: "mount"
+  property int fileIndex: 0
+  property bool cursorActive: false
+
   // Focusable rows in visual order, skipping whatever is hidden. Files are one
   // section with an inner index, mirroring the Dropbox panel.
   function sectionList() {
