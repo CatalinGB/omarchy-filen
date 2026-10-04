@@ -45,12 +45,16 @@ UNIT_DIR="${XDG_CONFIG_HOME}/systemd/user"
 CRED_DIR="${XDG_CONFIG_HOME}/credstore.encrypted"
 CREDENTIAL="${CRED_DIR}/filen-auth"
 SETTINGS_FILE="${XDG_CONFIG_HOME}/omarchy-filen/settings.conf"
+API_FRAGMENT="${XDG_RUNTIME_DIR}/filen/api-status.json"
 
 RECENTS="${OMARCHY_FILEN_RECENTS:-15}"
 
 RELOAD_NEEDED=0
 
-PLUGIN_UNITS=("omarchy-filen-mount.service" "filen-status.service" "filen-status.timer")
+MOUNT_UNIT="omarchy-filen-mount.service"
+STATUS_UNIT="filen-status.service"
+STATUS_TIMER="filen-status.timer"
+ALL_UNITS=("$MOUNT_UNIT" "$STATUS_UNIT" "$STATUS_TIMER")
 
 # ------------------------------------------------------------------ output
 
@@ -60,7 +64,7 @@ die()  { printf 'setup: error: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 Usage: setup [COMMAND]
 
   (no command) / install    Install filen, pre-seed rclone, write units.
@@ -68,7 +72,7 @@ Usage: setup [COMMAND]
   settings [KEY=VALUE ...]  Read/modify settings; keys are MOUNT_ROOT, CACHE_SIZE
                             (an rclone size such as 4G) and API_REFRESH_MIN
                             (positive integer minutes between status refreshes).
-  refresh-timer             Re-render filen-status.timer from API_REFRESH_MIN and
+  refresh-timer             Re-render ${STATUS_TIMER} from API_REFRESH_MIN and
                             apply the new cadence (used by the panel).
   mount-run --config-dir D --auth-config-path P
                             Internal: source settings, then exec the mount.
@@ -247,7 +251,7 @@ OnBootSec=2min
 OnUnitActiveSec=${API_REFRESH_MIN}min
 AccuracySec=1min
 Persistent=false
-Unit=filen-status.service
+Unit=${STATUS_UNIT}
 
 [Install]
 WantedBy=timers.target
@@ -256,9 +260,9 @@ EOF
 
 render_unit() {
   case "${1:-}" in
-    filen-mount|omarchy-filen-mount.service)       render_mount_unit ;;
-    filen-status.service|status-service)   render_status_unit ;;
-    filen-status.timer|status-timer)       render_status_timer ;;
+    filen-mount|"$MOUNT_UNIT")             render_mount_unit ;;
+    status-service|"$STATUS_UNIT")         render_status_unit ;;
+    status-timer|"$STATUS_TIMER")          render_status_timer ;;
     *) die "unknown unit: ${1:-} (mount|status-service|status-timer)" ;;
   esac
 }
@@ -291,7 +295,7 @@ wait_for_mount() {
       return 0
     fi
     if have systemctl; then
-      state="$(systemctl --user show -p ActiveState --value omarchy-filen-mount.service 2>/dev/null || true)"
+      state="$(systemctl --user show -p ActiveState --value "$MOUNT_UNIT" 2>/dev/null || true)"
       if [[ "$state" == "failed" ]]; then
         break
       fi
@@ -304,7 +308,7 @@ wait_for_mount() {
   done
   warn "the mount at $mount_root did not come up within ${timeout}s."
   warn "inspect the service log:"
-  warn "  journalctl --user -u omarchy-filen-mount.service"
+  warn "  journalctl --user -u ${MOUNT_UNIT}"
   warn "if the credential was rejected, re-run '$(basename "$SELF") provision'."
   return 1
 }
@@ -333,7 +337,7 @@ write_unit() {
 
 precheck_units() {
   local name file
-  for name in "${PLUGIN_UNITS[@]}"; do
+  for name in "${ALL_UNITS[@]}"; do
     file="${UNIT_DIR}/${name}"
     if [[ -e "$file" || -L "$file" ]]; then
       unit_file_is_managed "$file" ||
@@ -345,9 +349,9 @@ precheck_units() {
 
 install_units() {
   RELOAD_NEEDED=0
-  write_unit "omarchy-filen-mount.service"   "$(render_mount_unit)"
-  write_unit "filen-status.service"  "$(render_status_unit)"
-  write_unit "filen-status.timer"    "$(render_status_timer)"
+  write_unit "$MOUNT_UNIT"   "$(render_mount_unit)"
+  write_unit "$STATUS_UNIT"  "$(render_status_unit)"
+  write_unit "$STATUS_TIMER" "$(render_status_timer)"
   if (( RELOAD_NEEDED )); then
     daemon_reload
   else
@@ -358,10 +362,10 @@ install_units() {
 
 enable_status_timer() {
   have systemctl || return 0
-  if systemctl --user enable --now filen-status.timer >/dev/null 2>&1; then
-    say "Enabled filen-status.timer."
+  if systemctl --user enable --now "$STATUS_TIMER" >/dev/null 2>&1; then
+    say "Enabled ${STATUS_TIMER}."
   else
-    warn "could not enable filen-status.timer"
+    warn "could not enable ${STATUS_TIMER}"
   fi
   return 0
 }
@@ -370,13 +374,13 @@ enable_status_timer() {
 # cadence. Safe to run any time; the mount unit is never touched.
 cmd_refresh_timer() {
   load_settings
-  write_unit "filen-status.timer" "$(render_status_timer)"
+  write_unit "$STATUS_TIMER" "$(render_status_timer)"
   daemon_reload
-  if have systemctl && systemctl --user is-active --quiet filen-status.timer; then
-    if systemctl --user restart filen-status.timer; then
-      say "Restarted filen-status.timer."
+  if have systemctl && systemctl --user is-active --quiet "$STATUS_TIMER"; then
+    if systemctl --user restart "$STATUS_TIMER"; then
+      say "Restarted ${STATUS_TIMER}."
     else
-      warn "could not restart filen-status.timer"
+      warn "could not restart ${STATUS_TIMER}"
     fi
   fi
   return 0
@@ -428,6 +432,7 @@ cmd_check() {
 # unhealthy so it can gate scripted checks (H19).
 cmd_doctor() {
   local unhealthy=0 installed version_file target seed unit file state
+  local result main_status checked
   version_file="${DATA_DIR}/filen.version"
 
   if [[ -x "$FILEN_BIN" ]]; then
@@ -452,7 +457,7 @@ cmd_doctor() {
     unhealthy=1
   fi
 
-  for unit in "${PLUGIN_UNITS[@]}"; do
+  for unit in "${ALL_UNITS[@]}"; do
     file="${UNIT_DIR}/${unit}"
     if [[ -f "$file" ]]; then
       say "ok      unit ${unit}"
@@ -470,12 +475,33 @@ cmd_doctor() {
   fi
 
   if have systemctl; then
-    state="$(systemctl --user show -p ActiveState --value omarchy-filen-mount.service 2>/dev/null || true)"
+    state="$(systemctl --user show -p ActiveState --value "$MOUNT_UNIT" 2>/dev/null || true)"
     [[ -n "$state" ]] || state="unknown"
-    say "mount   omarchy-filen-mount.service: ${state}"
+    say "mount   ${MOUNT_UNIT}: ${state}"
     [[ "$state" == "failed" ]] && unhealthy=1
+    # The last run's outcome: a unit can be "active" but have a failed ExecMain;
+    # result and exit status make that visible (H19).
+    result="$(systemctl --user show -p Result --value "$MOUNT_UNIT" 2>/dev/null || true)"
+    main_status="$(systemctl --user show -p ExecMainStatus --value "$MOUNT_UNIT" 2>/dev/null || true)"
+    say "result  ${MOUNT_UNIT}: Result=${result:-unknown} ExecMainStatus=${main_status:-unknown}"
   else
     say "mount   unknown (systemctl not found)"
+  fi
+
+  # The API fragment's checkedAt is the last successful refresh the timer wrote.
+  if [[ -f "$API_FRAGMENT" ]]; then
+    checked="$(python3 -c 'import json, sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        doc = json.load(handle)
+except Exception:
+    raise SystemExit
+value = doc.get("checkedAt") if isinstance(doc, dict) else None
+if isinstance(value, (int, float)) and not isinstance(value, bool):
+    print(int(value))
+' "$API_FRAGMENT" 2>/dev/null || true)"
+    [[ -n "$checked" && "$checked" != "0" ]] || checked="unknown"
+    say "refresh api-status.json: checkedAt=${checked}"
   fi
 
   if (( unhealthy )); then
@@ -618,6 +644,10 @@ write_settings() {
   local dir tmp
   dir="$(dirname "$SETTINGS_FILE")"
   mkdir -p "$dir"
+  if [[ -e "$SETTINGS_FILE" || -L "$SETTINGS_FILE" ]]; then
+    unit_file_is_managed "$SETTINGS_FILE" ||
+      die "refusing to overwrite settings not owned by ${PLUGIN_ID}: $SETTINGS_FILE"
+  fi
   tmp="$(mktemp "${dir}/.settings.conf.XXXXXX")"
   {
     printf '%s\n' "$MANAGED_MARKER"
@@ -770,12 +800,12 @@ cmd_provision() {
   say "Stored the encrypted credential at ${CREDENTIAL}."
 
   if have systemctl; then
-    if ! systemctl --user enable --now omarchy-filen-mount.service; then
-      warn "could not enable omarchy-filen-mount.service; start it from the panel or run"
-      warn "  systemctl --user enable --now omarchy-filen-mount.service"
+    if ! systemctl --user enable --now "$MOUNT_UNIT"; then
+      warn "could not enable ${MOUNT_UNIT}; start it from the panel or run"
+      warn "  systemctl --user enable --now ${MOUNT_UNIT}"
       exit 1
     fi
-    say "Enabled and started omarchy-filen-mount.service: mounted now and at login."
+    say "Enabled and started ${MOUNT_UNIT}: mounted now and at login."
     # Confirm the mount actually came up before declaring success. Capture the
     # result and fail explicitly, rather than relying on `set -e` to exit when
     # the smoke check happens to be the function's last command.
@@ -784,7 +814,7 @@ cmd_provision() {
       die "the mount at ${MOUNT_ROOT} did not come up; see the hints above"
     fi
   else
-    warn "systemctl not found; omarchy-filen-mount.service was not enabled"
+    warn "systemctl not found; ${MOUNT_UNIT} was not enabled"
   fi
 }
 
@@ -795,7 +825,7 @@ cmd_uninstall() {
   mount_root="$MOUNT_ROOT"
 
   precheck_units
-  for unit in filen-status.timer filen-status.service omarchy-filen-mount.service; do
+  for unit in "$STATUS_TIMER" "$STATUS_UNIT" "$MOUNT_UNIT"; do
     file="${UNIT_DIR}/${unit}"
     [[ -e "$file" || -L "$file" ]] || continue
     unit_file_is_managed "$file" ||

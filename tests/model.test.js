@@ -62,6 +62,15 @@ assertEqual(
 )
 assertEqual(Model.stateLabel("not-installed"), "Not installed", "stateLabel not installed")
 assertEqual(Model.stateGlyph("not-installed"), Model.GLYPH_STOPPED, "stateGlyph not installed")
+
+assertEqual(typeof Model.stateTone, "function", "stateTone exported")
+assertEqual(Model.stateTone("failed"), "urgent", "stateTone failed")
+assertEqual(Model.stateTone("needs-auth"), "accent", "stateTone needs-auth")
+assertEqual(Model.stateTone("not-installed"), "accent", "stateTone not-installed")
+assertEqual(Model.stateTone("mounted"), "normal", "stateTone mounted")
+assertEqual(Model.stateTone("mounting"), "normal", "stateTone mounting")
+assertEqual(Model.stateTone("stopped"), "normal", "stateTone stopped")
+assertEqual(Model.stateTone(""), "normal", "stateTone unknown defaults normal")
 assertEqual(Model.stateFor({ ok: false }), "failed", "stateFor failure doc")
 assertEqual(
   Model.stateFor({ ok: true, installed: true, authenticated: true, running: false }),

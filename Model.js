@@ -114,6 +114,17 @@ function stateGlyph(state) {
   }
 }
 
+// One tone per state, so the bar and panel colour the icon from a single source
+// rather than repeating the same state switch in QML.
+function stateTone(state) {
+  switch (state) {
+    case "failed": return "urgent"
+    case "needs-auth": return "accent"
+    case "not-installed": return "accent"
+    default: return "normal"
+  }
+}
+
 // Single-account status document (see .scratch/omarchy-filen/status-contract.md)
 // mapped to one worst-first state string. Not-installed is its own state, not a
 // signed-out one: the panel offers Install (not Set up) and the bar shows no
@@ -230,6 +241,7 @@ if (typeof module !== "undefined") {
     usageFraction: usageFraction,
     stateLabel: stateLabel,
     stateGlyph: stateGlyph,
+    stateTone: stateTone,
     stateFor: stateFor,
     noActions: noActions,
     panelActions: panelActions,

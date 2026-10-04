@@ -27,8 +27,9 @@ BarWidget {
   // than the most common one. Anything merely off stays dim instead of
   // shouting.
   readonly property color iconColor: {
-    if (state === "failed") return Color.urgent
-    if (state === "needs-auth") return Color.accent
+    var tone = Model.stateTone(state)
+    if (tone === "urgent") return Color.urgent
+    if (tone === "accent") return Color.accent
     return defaultForeground
   }
 

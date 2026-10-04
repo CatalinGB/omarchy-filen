@@ -111,9 +111,12 @@ class Harness:
             self.fake_bin / "systemctl",
             "#!/usr/bin/env bash\n"
             'echo "systemctl $*" >> "$SYSTEMCTL_LOG"\n'
-            'if [[ "$1" == "--user" && "$2" == "show" && "$3" == "-p" '
-            '&& "$4" == "ActiveState" ]]; then\n'
-            '  echo "${FAKE_ACTIVESTATE:-}"\n'
+            'if [[ "$1" == "--user" && "$2" == "show" && "$3" == "-p" ]]; then\n'
+            '  case "$4" in\n'
+            '    ActiveState) echo "${FAKE_ACTIVESTATE:-}" ;;\n'
+            '    Result) echo "${FAKE_RESULT:-}" ;;\n'
+            '    ExecMainStatus) echo "${FAKE_EXECMAINSTATUS:-}" ;;\n'
+            "  esac\n"
             "fi\n"
             "exit 0\n",
         )
@@ -358,6 +361,19 @@ class SetupTest(unittest.TestCase):
         self.assertIn(MARKER, text)
         self.assertIn(f'MOUNT_ROOT="{root}"', text)
         self.assertIn('CACHE_SIZE="2G"', text)
+
+    def test_settings_refuses_foreign_settings_file(self):
+        # A settings.conf without our marker is not ours to overwrite; the
+        # write must refuse, exactly as write_unit does.
+        self.h.settings_file.parent.mkdir(parents=True, exist_ok=True)
+        original = 'MOUNT_ROOT="/somewhere"\n'
+        self.h.settings_file.write_text(original, encoding="utf-8")
+
+        result = self.h.run("settings", "CACHE_SIZE=2G")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing", result.stderr)
+        self.assertEqual(self.h.settings_file.read_text(encoding="utf-8"), original)
 
     def test_settings_preserves_unspecified_keys(self):
         root = self.h.tmp / "root"
@@ -681,6 +697,49 @@ class SetupTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("stale   filen pinned 0.2.9, installed 0.2.0", result.stdout)
+
+    def test_doctor_reports_last_mount_result(self):
+        self.h.seed_binaries()
+        self.h.run("install")
+        self.h.credential.parent.mkdir(parents=True, exist_ok=True)
+        self.h.credential.write_text("blob", encoding="utf-8")
+        self.h.env["FAKE_ACTIVESTATE"] = "active"
+        self.h.env["FAKE_RESULT"] = "success"
+        self.h.env["FAKE_EXECMAINSTATUS"] = "0"
+
+        result = self.h.run("doctor")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Result=success ExecMainStatus=0", result.stdout)
+
+    def test_doctor_reports_fragment_checked_at(self):
+        self.h.seed_binaries()
+        self.h.run("install")
+        self.h.credential.parent.mkdir(parents=True, exist_ok=True)
+        self.h.credential.write_text("blob", encoding="utf-8")
+        self.h.env["FAKE_ACTIVESTATE"] = "active"
+        fragment = self.h.runtime / "filen" / "api-status.json"
+        fragment.parent.mkdir(parents=True, exist_ok=True)
+        fragment.write_text(
+            json.dumps({"ok": True, "checkedAt": 1700000000}), encoding="utf-8"
+        )
+
+        result = self.h.run("doctor")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("checkedAt=1700000000", result.stdout)
+
+    def test_doctor_omits_refresh_line_without_fragment(self):
+        self.h.seed_binaries()
+        self.h.run("install")
+        self.h.credential.parent.mkdir(parents=True, exist_ok=True)
+        self.h.credential.write_text("blob", encoding="utf-8")
+        self.h.env["FAKE_ACTIVESTATE"] = "active"
+
+        result = self.h.run("doctor")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("checkedAt=", result.stdout)
 
     def test_provision_requires_a_terminal(self):
         self.h.seed_binaries()

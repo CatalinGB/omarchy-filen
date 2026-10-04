@@ -101,8 +101,9 @@ Panel {
     ? "Sign in again and refresh the encrypted credential"
     : "Sign in once and store the credential systemd-encrypted"
   readonly property color stateColor: {
-    if (state === "failed") return root.urgent
-    if (state === "needs-auth") return Color.accent
+    var tone = Model.stateTone(state)
+    if (tone === "urgent") return root.urgent
+    if (tone === "accent") return Color.accent
     return root.foreground
   }
 
@@ -257,13 +258,6 @@ Panel {
     if (hasService) filen.refresh()
   }
 
-  // The shell injects `settings` into widgets but not services. The widget is
-  // expected to forward them, but the panel does too so showLabel /
-  // refreshIntervalSec / apiRefreshMin are honoured even on a hot-reload.
-  function syncService() {
-    if (root.filen && "settings" in root.filen) root.filen.settings = root.settings
-  }
-
   // ---------------------------------------------------------------- terminal
 
   // Prefer Omarchy's launcher (setsid + uwsm-app + the user's chosen
@@ -291,7 +285,6 @@ Panel {
     cursorActive = false
     fileIndex = 0
     nowMs = Date.now()
-    syncService()
     if (panelFlick) panelFlick.contentY = 0
     refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -322,8 +315,6 @@ Panel {
     return false
   }
 
-  onFilenChanged: syncService()
-  onSettingsChanged: syncService()
   onRemoteFilesChanged: ensureCursor()
   onFocusSectionChanged: scrollCursorIntoView()
 

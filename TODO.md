@@ -31,3 +31,12 @@ Known, intentional limitations (not bugs) are recorded in
 [`docs/troubleshooting.md`](docs/troubleshooting.md): this is a **mount**, not a
 sync client (no offline folder); **single account**; the pinned `filen-rs` 0.2.9
 is a **pre-release**; no plan/subscription data.
+
+# Open points / future extensions
+- [ ] create a configuration view
+- [ ] study what is required to publish the plugin in omarchy plugins
+- [ ] check how to run a fresh omarchy instalation in Qemu or a VM
+- [ ] add Mermaid diagrams for the end users but also for the contributors
+- [ ] add contributors guideline
+- [ ] add dependabot or something similar
+- [ ] add test coverage metrics
