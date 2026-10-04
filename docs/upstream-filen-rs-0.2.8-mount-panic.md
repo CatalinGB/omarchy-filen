@@ -1,11 +1,9 @@
 # Upstream issue — `filen mount` panics in `pipe_output_to_logs` on 0.2.8
 
-**Status: draft — do not file until re-verified.** This is a ready-to-file body
-for [`FilenCloudDienste/filen-rs`](https://github.com/FilenCloudDienste/filen-rs)
-(ticket H23). Before filing, re-capture the backtrace with
-`RUST_BACKTRACE=full` on the crash build and adjust the frame/line numbers; the
-values below are from the reporter's build and are called out where approximate.
-Do **not** include real credentials, account data, or the auth-config contents.
+**Status: filed** → [`FilenCloudDienste/filen-rs#19`](https://github.com/FilenCloudDienste/filen-rs/issues/19)
+(ticket H23). Below is the filed body; the panic line `113:52` and the
+`pipe_output_to_logs` → `rclone_cmds::mount` frames are from the live capture.
+No credentials, account data, or auth-config contents are included.
 
 ---
 
