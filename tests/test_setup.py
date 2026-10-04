@@ -253,6 +253,8 @@ class SetupTest(unittest.TestCase):
             "WantedBy=graphical-session.target",
             "Restart=on-failure",
             "KillMode=mixed",
+            "KillSignal=SIGINT",
+            "ExecStopPost=",
             "LoadCredentialEncrypted=filen-auth",
             "ConditionPathExists=%E/credstore.encrypted/filen-auth",
             "mount-run --config-dir %t/filen --auth-config-path %d/filen-auth",

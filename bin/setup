@@ -200,8 +200,11 @@ ExecStartPre=/usr/bin/mkdir -p %t/filen
 ExecStart=$setup_q mount-run --config-dir %t/filen --auth-config-path %d/filen-auth
 Restart=on-failure
 RestartSec=5
-TimeoutStartSec=60
 KillMode=mixed
+# filen's graceful shutdown handler is SIGINT-only, so send SIGINT to unmount
+# cleanly; the post-stop hook detaches a stale FUSE mount if it did not.
+KillSignal=SIGINT
+ExecStopPost=$setup_q cleanup
 TimeoutStopSec=30
 
 [Install]
@@ -662,6 +665,13 @@ cmd_mount_run() {
     mount --cache-size "$CACHE_SIZE" "$MOUNT_ROOT"
 }
 
+# ExecStopPost hook: detach a stale FUSE mount after the unit stops. Idempotent.
+cmd_cleanup() {
+  load_settings
+  have fusermount3 && fusermount3 -uz "$MOUNT_ROOT" 2>/dev/null || true
+  return 0
+}
+
 # --------------------------------------------------------------- commands
 
 cmd_install() {
@@ -959,6 +969,7 @@ main() {
     update|repair)     cmd_install "$@" ;;
     settings)          cmd_settings "$@" ;;
     mount-run)         cmd_mount_run "$@" ;;
+    cleanup)           cmd_cleanup ;;
     provision)         cmd_provision "$@" ;;
     uninstall|--uninstall) cmd_uninstall "${1:-}" ;;
     check)             cmd_check ;;
