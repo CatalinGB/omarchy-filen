@@ -106,7 +106,7 @@ class Harness:
         target = self.run("rclone-target").stdout.strip()
         write_exec(self.filen_bin, "#!/usr/bin/env bash\nexit 0\n")
         write_exec(self.data_dir / "rclone" / target, "#!/usr/bin/env bash\nexit 0\n")
-        (self.data_dir / "filen.version").write_text("0.2.8\n", encoding="utf-8")
+        (self.data_dir / "filen.version").write_text("0.2.9\n", encoding="utf-8")
 
     def calls(self):
         if not self.exec_log.exists():
@@ -137,12 +137,12 @@ class SetupTest(unittest.TestCase):
     def test_asset_name_gnu(self):
         result = self.h.run("asset-name", "x86_64", "gnu")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "filen-cli-0.2.8-x86_64-unknown-linux-gnu")
+        self.assertEqual(result.stdout.strip(), "filen-cli-0.2.9-x86_64-unknown-linux-gnu")
 
     def test_asset_name_arm_musl(self):
         result = self.h.run("asset-name", "aarch64", "musl")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "filen-cli-0.2.8-aarch64-unknown-linux-musl")
+        self.assertEqual(result.stdout.strip(), "filen-cli-0.2.9-aarch64-unknown-linux-musl")
 
     def test_asset_name_rejects_unknown_architecture(self):
         result = self.h.run("asset-name", "sparc", "gnu")
@@ -185,16 +185,18 @@ class SetupTest(unittest.TestCase):
             "WantedBy=graphical-session.target",
             "Restart=on-failure",
             "KillMode=mixed",
-            "RuntimeDirectory=filen",
-            "RuntimeDirectoryMode=0700",
             "LoadCredentialEncrypted=filen-auth",
             "ConditionPathExists=%E/credstore.encrypted/filen-auth",
             "mount-run --config-dir %t/filen --auth-config-path %d/filen-auth",
         ):
             self.assertIn(token, unit)
         # The rclone pre-seed happens inside the wrapper (filen-rs looks under
-        # <config-dir>/rclone/), so the unit itself carries no ExecStartPre.
-        self.assertNotIn("ExecStartPre=", unit)
+        # <config-dir>/rclone/); the unit only creates the tmpfs config dir.
+        self.assertIn("ExecStartPre=/usr/bin/mkdir -p %t/filen", unit)
+        self.assertNotIn("rclone-v", unit)
+        # Do NOT reintroduce RuntimeDirectory: on systemd 261 it breaks
+        # credential setup for a unit that also uses LoadCredentialEncrypted.
+        self.assertNotIn("RuntimeDirectory=", unit)
         # The mount root and cache size are now live settings, not baked in.
         self.assertNotIn("--cache-size", unit)
         self.assertNotIn(str(self.h.home / "Filen"), unit)
@@ -352,7 +354,7 @@ class SetupTest(unittest.TestCase):
         self.assertNotIn("curl", "\n".join(self.h.calls()))
         self.assertEqual(
             (self.h.data_dir / "filen.version").read_text(encoding="utf-8").strip(),
-            "0.2.8",
+            "0.2.9",
         )
 
     def test_install_redownloads_when_version_marker_differs(self):
