@@ -106,6 +106,12 @@ systemctl --user restart filen-mount.service
 journalctl --user -u filen-mount.service -f
 ```
 
+## Open from the Omarchy menu (optional)
+
+Merge [`contrib/omarchy-menu-filen.jsonc.example`](contrib/omarchy-menu-filen.jsonc.example)
+into `~/.config/omarchy/extensions/omarchy-menu.jsonc` to add Filen entries
+(web, terminal, mount/unmount) to the menu.
+
 ## Troubleshooting
 
 - **Sign-in needed** — your credential is missing or was rejected (often after a

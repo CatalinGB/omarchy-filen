@@ -1,0 +1,23 @@
+// Optional: open Filen from the Omarchy menu.
+//
+// Merge these keys into ~/.config/omarchy/extensions/omarchy-menu.jsonc
+// (see /usr/share/omarchy/config/omarchy/extensions/omarchy-menu.jsonc for the
+// schema). Parent menus are inferred from the dotted ids.
+{
+  "personal.filen": { "icon": "󰅟", "label": "Filen" },
+  "personal.filen.web": {
+    "icon": "󰖟",
+    "label": "Open Filen web",
+    "action": "uwsm-app -- xdg-open https://app.filen.io"
+  },
+  "personal.filen.cli": {
+    "icon": "󰆍",
+    "label": "Open Filen terminal",
+    "action": "omarchy-launch-terminal filen"
+  },
+  "personal.filen.mount": {
+    "icon": "󰅠",
+    "label": "Mount / unmount Filen",
+    "action": "systemctl --user restart filen-mount.service"
+  }
+}
