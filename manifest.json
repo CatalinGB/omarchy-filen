@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "filen.storage",
+  "id": "io.github.catalingb.filen",
   "name": "Filen",
   "version": "0.1.0",
   "author": "CatalinGB",
@@ -25,7 +25,8 @@
       "cacheMaxSizeGB": 4,
       "refreshIntervalSec": 15,
       "apiRefreshMin": 10,
-      "showLabel": false
+      "showLabel": false,
+      "showRecents": true
     },
     "schema": [
       {
@@ -71,6 +72,13 @@
         "label": "Show text in bar",
         "defaultValue": false,
         "description": "Print the mount state next to the bar icon."
+      },
+      {
+        "key": "showRecents",
+        "type": "boolean",
+        "label": "Show recent files",
+        "defaultValue": true,
+        "description": "List recently changed files in the panel. Turn off if you mainly use Filen for backup."
       }
     ]
   }

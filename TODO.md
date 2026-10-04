@@ -33,10 +33,12 @@ sync client (no offline folder); **single account**; the pinned `filen-rs` 0.2.9
 is a **pre-release**; no plan/subscription data.
 
 # Open points / future extensions
-- [ ] create a configuration view
+- [x] create a configuration view
+    - [x] the recent files might not always show interesting info(e.g. if filen is mostly used for encrypted backup), for such a case the recents view might be disabled
 - [ ] study what is required to publish the plugin in omarchy plugins
 - [ ] check how to run a fresh omarchy instalation in Qemu or a VM
 - [ ] add Mermaid diagrams for the end users but also for the contributors
 - [ ] add contributors guideline
 - [ ] add dependabot or something similar
 - [ ] add test coverage metrics
+- [ ] estblish some stability / performance tests

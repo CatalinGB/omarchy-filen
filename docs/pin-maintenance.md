@@ -1,6 +1,6 @@
 # Dependency-pin maintenance
 
-`filen.storage` pins the two runtimes it downloads and runs them exactly as
+`io.github.catalingb.filen` pins the two runtimes it downloads and runs them exactly as
 pinned. This is the runbook for moving a pin safely. It exists because the
 `filen` CLI is a public beta and, at the time of writing, the pin is a
 **pre-release** chosen to dodge a crash.

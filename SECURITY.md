@@ -1,4 +1,4 @@
-# Security model — `filen.storage`
+# Security model — `io.github.catalingb.filen`
 
 This document states what the plugin protects, what it does **not**, and why. It
 is written for the user and for a reviewer. It reflects the decisions in

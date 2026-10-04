@@ -1,6 +1,6 @@
 # Supported environments
 
-What `filen.storage` runs on, what it needs, and what it does not promise.
+What `io.github.catalingb.filen` runs on, what it needs, and what it does not promise.
 
 ## Platform
 

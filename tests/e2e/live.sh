@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# tests/e2e/live.sh -- live end-to-end pass for the filen.storage plugin.
+# tests/e2e/live.sh -- live end-to-end pass for the io.github.catalingb.filen plugin.
 #
 # This is the layer CI cannot run: it drives the real `filen` binary, the real
 # FUSE mount, the real systemd user units, and the real Filen API on an actual
@@ -203,7 +203,7 @@ step_uninstall_reinstall() {
 # ------------------------------------------------------------------- main
 
 main() {
-  printf 'filen.storage live E2E\n'
+  printf 'io.github.catalingb.filen live E2E\n'
   printf 'report log: %s\n' "$LOG"
 
   step_validate || true

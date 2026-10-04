@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # bin/setup -- idempotent install / uninstall / provisioning for the
-# filen.storage Omarchy plugin.
+# io.github.catalingb.filen Omarchy plugin.
 #
 #   setup                     Install the pinned filen binary, pre-seed rclone,
 #                             write the systemd user units, daemon-reload.
@@ -23,8 +23,8 @@
 #
 set -euo pipefail
 
-PLUGIN_ID="filen.storage"
-MANAGED_MARKER="# Managed by the filen.storage Omarchy plugin; do not edit."
+PLUGIN_ID="io.github.catalingb.filen"
+MANAGED_MARKER="# Managed by the io.github.catalingb.filen Omarchy plugin; do not edit."
 FILEN_VERSION="0.2.9"
 FILEN_RELEASES_REPO="FilenCloudDienste/filen-cli-releases"
 RCLONE_VERSION="1.74.2"

@@ -4,7 +4,7 @@ A state → cause → action reference for the states the panel and bar widget s
 Start by reading the current state and the status JSON:
 
 ```bash
-PLUGIN="$HOME/.config/omarchy/plugins/filen.storage"
+PLUGIN="$HOME/.config/omarchy/plugins/io.github.catalingb.filen"
 "$PLUGIN/bin/status" | python3 -m json.tool   # the panel's exact contract
 "$PLUGIN/bin/setup" doctor                   # pin / install / mount health
 ```

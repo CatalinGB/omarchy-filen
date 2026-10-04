@@ -20,8 +20,8 @@ import "Model.js" as Model
 // exposes a richer IPC surface (refresh/status) than the base provides.
 Panel {
   id: root
-  moduleName: "filen.storage"
-  ipcTarget: "filen.storage"
+  moduleName: "io.github.catalingb.filen"
+  ipcTarget: "io.github.catalingb.filen"
   manageIpc: false
 
   property var anchorItem: null
@@ -84,7 +84,8 @@ Panel {
     : Model.noActions()
 
   readonly property bool mountVisible: root.actions.mount
-  readonly property bool filesVisible: root.actions.files && remoteFiles.length > 0
+  readonly property bool showRecentsOn: root.setting("showRecents", true) === true
+  readonly property bool filesVisible: Model.filesVisible(root.actions.files, remoteFiles.length, root.showRecentsOn)
   readonly property bool setupVisible: root.actions.setup
   readonly property bool installVisible: root.actions.install
   readonly property bool repairVisible: root.actions.repair
@@ -123,6 +124,11 @@ Panel {
   property string focusSection: "mount"
   property int fileIndex: 0
   property bool cursorActive: false
+
+  // True while a settings field holds keyboard focus; the key catcher stands
+  // down (PanelKeyCatcher.blocked) so the field, not the cursor model, gets
+  // the keys.
+  property bool settingsEditing: false
 
   // Focusable rows in visual order, skipping whatever is hidden. Files are one
   // section with an inner index, mirroring the Dropbox panel.
@@ -258,6 +264,21 @@ Panel {
     if (hasService) filen.refresh()
   }
 
+  // Merge a settings change into this plugin's own shell.json entry and persist
+  // it. Applied locally first so the panel redraws on the click itself; the
+  // shell re-injects the canonical entry, which BarWidget forwards to the
+  // service. The service mirrors mount/cache/api to settings.conf for the
+  // systemd units (see Service.qml).
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+    root.settings = entry
+    if (root.hostWidget && "settings" in root.hostWidget) root.hostWidget.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
   // ---------------------------------------------------------------- terminal
 
   // Prefer Omarchy's launcher (setsid + uwsm-app + the user's chosen
@@ -350,6 +371,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: root.settingsEditing
       onMoveRequested: function(dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
         root.moveCursor(dx, dy)
@@ -385,9 +407,7 @@ Panel {
             id: hero
             width: parent.width
             title: "Filen"
-            meta: root.hasService
-              ? (Model.stateLabel(root.state) + (root.unitState !== "" ? " · " + root.unitState : ""))
-              : "Unavailable"
+            meta: root.hasService ? Model.stateLabel(root.state) : "Unavailable"
             foreground: root.foreground
             fontFamily: root.fontFamily
             iconOpacity: root.running ? 1.0 : 0.65
@@ -463,10 +483,6 @@ Panel {
               label: "Mount"
               value: root.hasService && String(root.filen.mountPath || "") !== ""
                 ? String(root.filen.mountPath) : "—"
-            }
-            InfoPair {
-              label: "Unit"
-              value: root.unitState !== "" ? root.unitState : "—"
             }
           }
 
@@ -657,11 +673,11 @@ Panel {
             onHoveredIn: root.setSection("updates")
           }
 
-          // ---- settings (read-only surface of barWidget.schema) ----
+          // ---- settings (editable; writes this plugin's shell.json entry) ----
           Column {
             visible: root.hasService
             width: parent.width
-            spacing: Style.spacing.labelGap
+            spacing: Style.space(10)
 
             PanelSeparator { foreground: root.foreground }
 
@@ -671,27 +687,62 @@ Panel {
               fontFamily: root.fontFamily
             }
 
-            InfoPair {
+            SettingTextRow {
               label: "Mount folder"
-              value: root.hasService
-                ? String(root.filen.mountRoot || root.setting("mountRoot", "~/Filen"))
-                : String(root.setting("mountRoot", "~/Filen"))
+              value: root.setting("mountRoot", "~/Filen")
+              onCommitted: function(v) { root.persistSettings({ mountRoot: v }) }
             }
-            InfoPair {
-              label: "Status refresh"
-              value: String(root.hasService ? root.filen.refreshIntervalSec : root.setting("refreshIntervalSec", 15)) + "s"
-            }
-            InfoPair {
-              label: "Storage refresh"
-              value: String(root.hasService ? root.filen.apiRefreshMin : root.setting("apiRefreshMin", 10)) + " min"
-            }
-            InfoPair {
+
+            SettingNumberRow {
               label: "Cache limit"
-              value: String(root.setting("cacheMaxSizeGB", 4)) + " GB"
+              suffix: "GB"
+              value: root.setting("cacheMaxSizeGB", 4)
+              from: 1
+              to: 512
+              stepSize: 1
+              onCommitted: function(v) { root.persistSettings({ cacheMaxSizeGB: v }) }
             }
-            InfoPair {
-              label: "Show label"
-              value: root.setting("showLabel", false) === true ? "Yes" : "No"
+
+            SettingNumberRow {
+              label: "Status refresh"
+              suffix: "s"
+              value: root.setting("refreshIntervalSec", 15)
+              from: 5
+              to: 300
+              stepSize: 5
+              onCommitted: function(v) { root.persistSettings({ refreshIntervalSec: v }) }
+            }
+
+            SettingNumberRow {
+              label: "Storage refresh"
+              suffix: "min"
+              value: root.setting("apiRefreshMin", 10)
+              from: 5
+              to: 240
+              stepSize: 5
+              onCommitted: function(v) { root.persistSettings({ apiRefreshMin: v }) }
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Show text in bar"
+              description: "Print the mount state next to the bar icon."
+              checked: root.setting("showLabel", false) === true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              hasCursor: false
+              onClicked: root.persistSettings({ showLabel: !checked })
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Show recent files"
+              description: "List recently changed files in the panel. Turn off if you mainly use Filen for backup."
+              checked: root.showRecentsOn
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              hasCursor: false
+              onClicked: root.persistSettings({ showRecents: !checked })
             }
           }
         }
@@ -904,6 +955,91 @@ Panel {
     font.family: root.fontFamily
     font.pixelSize: Style.font.bodySmall
     elide: Text.ElideRight
+  }
+
+  // A label on the left and an editable control on the right. Numbers use the
+  // kit's spin field; text commits on Enter or focus loss.
+  component SettingTextRow: RowLayout {
+    id: settingTextRow
+    property string label: ""
+    property string value: ""
+    signal committed(string value)
+
+    width: parent ? parent.width : implicitWidth
+    spacing: Style.space(8)
+
+    InfoLabel {
+      text: settingTextRow.label
+      Layout.alignment: Qt.AlignVCenter
+    }
+
+    Item { Layout.fillWidth: true }
+
+    TextField {
+      id: settingTextInput
+      Layout.preferredWidth: Style.space(180)
+      text: settingTextRow.value
+      horizontalAlignment: Text.AlignRight
+      foreground: root.foreground
+      accent: Color.accent
+      onActiveFocusChanged: root.settingsEditing = activeFocus
+      onEditingFinished: {
+        var next = String(text).trim()
+        if (next === "" || next === settingTextRow.value) {
+          text = settingTextRow.value
+          return
+        }
+        settingTextRow.committed(next)
+      }
+    }
+  }
+
+  component SettingNumberRow: RowLayout {
+    id: settingNumberRow
+    property string label: ""
+    property string suffix: ""
+    property int value: 0
+    property int from: 0
+    property int to: 100
+    property int stepSize: 1
+    signal committed(int value)
+
+    width: parent ? parent.width : implicitWidth
+    spacing: Style.space(8)
+
+    InfoLabel {
+      text: settingNumberRow.label
+      Layout.alignment: Qt.AlignVCenter
+    }
+
+    Item { Layout.fillWidth: true }
+
+    NumberField {
+      id: settingNumberField
+      label: ""
+      value: settingNumberRow.value
+      from: settingNumberRow.from
+      to: settingNumberRow.to
+      stepSize: settingNumberRow.stepSize
+      foreground: root.foreground
+      fieldWidth: Style.space(110)
+      Layout.alignment: Qt.AlignVCenter
+      onModified: function(v) { settingNumberRow.committed(v) }
+
+      Connections {
+        target: settingNumberField.field
+        function onActiveFocusChanged() { root.settingsEditing = settingNumberField.field.activeFocus }
+      }
+    }
+
+    Text {
+      visible: settingNumberRow.suffix !== ""
+      text: settingNumberRow.suffix
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      Layout.alignment: Qt.AlignVCenter
+    }
   }
 
   function fileMeta(file) {

@@ -119,6 +119,14 @@ assertEqual(
 )
 assertEqual(Model.fileUri(""), "file://", "fileUri empty")
 
+assertEqual(typeof Model.filesVisible, "function", "filesVisible exported")
+assertEqual(Model.filesVisible(true, 3, true), true, "filesVisible running+enabled+files")
+assertEqual(Model.filesVisible(true, 3, false), false, "filesVisible disabled hides")
+assertEqual(Model.filesVisible(true, 0, true), false, "filesVisible empty hides")
+assertEqual(Model.filesVisible(false, 3, true), false, "filesVisible not-running hides")
+assertEqual(Model.filesVisible(true, 3, undefined), true, "filesVisible defaults enabled")
+assertEqual(Model.filesVisible(true, "2", true), true, "filesVisible coerces count")
+
 if (failures > 0) {
   console.error("FAILED: " + failures + " of " + checks + " assertions")
   process.exit(1)

@@ -16,7 +16,7 @@ The Rust rewrite of the Filen client, shipped as the `filen` binary. The plugin'
 only integration surface.
 _Avoid_: filen-cli (that names the Node, sunsetting CLI), filen-desktop.
 
-**Plugin (`filen.storage`)**:
+**Plugin (`io.github.catalingb.filen`)**:
 The Omarchy shell plugin: manifest, QML, and `bin/` helpers, installed under
 `~/.config/omarchy/plugins/`.
 
@@ -27,6 +27,13 @@ glyph.
 **Panel**:
 The popup surface: status, quota, recents, and controls. Opened from the bar
 widget.
+
+**Configuration view**:
+The panel's editable Settings section. Writes the plugin's own inline entry in
+`~/.config/omarchy/shell.json` (via `updateEntryInline`); the service mirrors the
+mount-affecting keys to `settings.conf` for the systemd units.
+_Avoid_: settings dialog (the shell ships no schema-driven dialog), preferences
+window.
 
 **Service**:
 The generated systemd user units — `omarchy-filen-mount.service` and

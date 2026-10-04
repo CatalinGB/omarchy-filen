@@ -15,7 +15,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SETUP = REPO / "bin" / "setup"
-MARKER = "# Managed by the filen.storage Omarchy plugin; do not edit."
+MARKER = "# Managed by the io.github.catalingb.filen Omarchy plugin; do not edit."
 
 FAKE_FILEN = """#!/usr/bin/env bash
 case "$*" in

@@ -205,6 +205,15 @@ function panelActions(status) {
   return live
 }
 
+// Whether the recent-files section should render: only while the mount is
+// running, only when the list is non-empty, and only when the user has left
+// `showRecents` on. One source of truth for the panel gate (unit-testable).
+function filesVisible(actionsFiles, fileCount, showRecents) {
+  if (actionsFiles !== true) return false
+  if (showRecents === false) return false
+  return Number(fileCount || 0) > 0
+}
+
 function fileUri(path) {
   var parts = String(path === null || path === undefined ? "" : path).split("/")
   for (var i = 0; i < parts.length; i++) parts[i] = encodeURIComponent(parts[i])
@@ -245,6 +254,7 @@ if (typeof module !== "undefined") {
     stateFor: stateFor,
     noActions: noActions,
     panelActions: panelActions,
+    filesVisible: filesVisible,
     fileUri: fileUri,
     formatRelativeTime: formatRelativeTime
   }

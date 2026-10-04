@@ -27,13 +27,27 @@ and this project adheres to
   0.2.8 mount panic; `verification.md` is rewritten as the live E2E checklist.
 - Provisioning runs a post-start mount smoke check and reports an actionable
   failure instead of raw systemd internals.
+- The panel's Settings section is now editable: mount folder, cache limit,
+  refresh cadences, the bar label, and a new **Show recent files** toggle
+  (`showRecents`). Changes write the plugin's own `shell.json` entry and take
+  effect immediately.
 
 ### Changed
 
+- Renamed the plugin id from `filen.storage` to `io.github.catalingb.filen`,
+  matching the Omarchy marketplace's namespaced, globally-unique id rule.
+  Existing installs must be removed and re-added (see the README); the encrypted
+  credential is reused.
 - Pin `filen` **0.2.9** (a pre-release); 0.2.8 panics on mount.
 - Generated units no longer declare `RuntimeDirectory=`; `ExecStartPre` creates
   the tmpfs config dir instead, avoiding the systemd credential
   `File exists` collision (ADR-0005).
+
+### Removed
+
+- The raw systemd unit state (`active`/`inactive`) from the panel — both the
+  hero suffix and the `Unit` row. It is systemd jargon that duplicates the
+  derived **Status**; the state stays in the status contract for diagnostics.
 
 ### Fixed
 

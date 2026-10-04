@@ -1,4 +1,4 @@
-# Verification — `filen.storage`
+# Verification — `io.github.catalingb.filen`
 
 Three layers, cheapest first. This document is the **live E2E checklist**: the
 pass that must be run by hand on a real Omarchy box with a real Filen account,
@@ -9,9 +9,10 @@ API. CI covers the two automated layers.
 
 | Check | Command | Result |
 |---|---|---|
-| Python unit tests | `python3 -m unittest discover -s tests` | **124 tests, OK** |
-| Model/presentation assertions | `node tests/model.test.js` | **32 assertions, OK** |
+| Python tests (unit + integration) | `python3 -m unittest discover -s tests` | **135 tests, OK** |
+| Model/presentation assertions | `node tests/model.test.js` | **49 assertions, OK** |
 | Hermetic integration suite | `python3 -m unittest discover -s tests/integration` | **28 tests, OK** |
+| Python coverage (`bin/status`) | `python3 -m coverage run -m unittest discover -s tests && python3 -m coverage report` | **93%** (reported in CI) |
 | Manifest valid | `omarchy plugin validate .` | exit 0 |
 | Helper emits the contract (no `filen`) | `./bin/status` | `{"ok":true,"installed":false,…}` exit 0 |
 | Prerequisite detection | `./bin/setup check` | `ok fuse3`, `ok python3`, `ok systemd 261 (>= 256)`, `ok curl`; exit 0 |
@@ -31,7 +32,9 @@ end-to-end coverage CI can run.
 
 `tests/e2e/live.sh` automates the deterministic parts of the pass below and
 writes a timestamped report (default `~/.local/state/omarchy-filen/e2e/`). It
-prompts **exactly once** for the interactive sign-in, which only a human can do:
+prompts **exactly once** for the interactive sign-in, which only a human can do.
+To run the whole pass on a clean, disposable machine without a spare laptop, see
+[VM testing](vm-testing.md).
 
 ```bash
 tests/e2e/live.sh
@@ -115,6 +118,10 @@ each step.
   headlessly because it imports the in-shell `qs.*` modules; CI checks syntax
   with `qmllint`/`qmlformat` when available, and the live pass is the only full
   check.
+- Line coverage measures `bin/status` (the only Python product file; its
+  functions are imported in-process by `tests/test_status.py`). `bin/setup` is
+  bash and the QML/JS layer is not Python, so those are covered by the
+  integration and live suites rather than by coverage percentages.
 - `bin/status` serves the panel; it never runs `filen` and never sees a
   credential. If you can read a secret out of its output, that is a security
   bug, not a verification failure.

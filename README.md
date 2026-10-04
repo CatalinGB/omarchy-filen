@@ -1,13 +1,22 @@
 # Filen for Omarchy
 
+[![CI](https://github.com/CatalinGB/omarchy-filen/actions/workflows/ci.yml/badge.svg)](https://github.com/CatalinGB/omarchy-filen/actions/workflows/ci.yml)
+
 An Omarchy-native integration for [Filen](https://filen.io) — end-to-end
 encrypted cloud storage. A bar widget and panel show your mount status, storage
 usage, and recent files; your Filen drive mounts as an ordinary folder. Built on
 the [filen-rs](https://github.com/FilenCloudDienste/filen-rs) `filen` CLI.
 
-```
-Bar widget ─▶ systemd user units ─▶ filen mount ─▶ ~/Filen
- (status)      (the service)         (rclone/FUSE)   (what you browse)
+```mermaid
+flowchart LR
+    NI["Not installed"] -->|Install| NA["Sign-in needed"]
+    NA -->|Set up| ST["Stopped"]
+    ST -->|Mount| MO["Mounting"]
+    MO --> MT["Mounted"]
+    MT -->|Unmount| ST
+    ST -->|Mount fails| FA["Failed"]
+    MO -->|Mount fails| FA
+    FA -->|Repair| ST
 ```
 
 The plugin installs everything it needs: the `filen` binary, rclone, and its
@@ -41,9 +50,21 @@ plus the pinned `filen` 0.2.9 / rclone 1.74.2 versions — is in
 omarchy plugin add https://github.com/CatalinGB/omarchy-filen.git --enable
 ```
 
-Omarchy clones the repository into `~/.config/omarchy/plugins/filen.storage/`,
-validates it, and adds the bar icon. Plugins run unsandboxed with your user
-permissions — review the source before accepting the prompt.
+Omarchy clones the repository into
+`~/.config/omarchy/plugins/io.github.catalingb.filen/`, validates it, and adds
+the bar icon. Plugins run unsandboxed with your user permissions — review the
+source before accepting the prompt.
+
+**Upgrading from an earlier checkout?** The plugin id changed from
+`filen.storage` to `io.github.catalingb.filen`, so it is a different install.
+Remove the old one first (`omarchy plugin update` cannot cross an id rename):
+
+```bash
+"$HOME/.config/omarchy/plugins/filen.storage/bin/setup" --uninstall
+omarchy plugin remove filen.storage
+```
+
+Then install as above. Your encrypted credential is reused.
 
 ## Set up (once)
 
@@ -76,8 +97,10 @@ stopped → mounted), so problems surface without opening the panel.
 
 ## Settings
 
-Right-click the bar widget → **Settings**, or edit the entry in
-`~/.config/omarchy/shell.json`.
+Open the panel and edit **Settings** at the bottom: mount folder, cache limit,
+refresh cadences, the bar label, and whether recent files appear. Each change is
+written to the plugin's own entry in `~/.config/omarchy/shell.json` and takes
+effect immediately.
 
 | Setting | Default | Notes |
 |---|---|---|
@@ -86,9 +109,11 @@ Right-click the bar widget → **Settings**, or edit the entry in
 | Status refresh | 15 s | Local-only check; cheap |
 | Storage/recents refresh | 10 min | Network calls; keep it slow |
 | Show text in bar | off | Prints state next to the icon |
+| Show recent files | on | Hide the recents list (e.g. when Filen is used mainly for backup) |
 
-Changing **Mount folder** or **Cache size limit** is a live change: it rewrites
-`~/.config/omarchy-filen/settings.conf` and restarts the mount. The other
+You can also edit the entry directly in `~/.config/omarchy/shell.json`.
+Changing **Mount folder** or **Cache size limit** rewrites
+`~/.config/omarchy-filen/settings.conf` and restarts the mount; the other
 settings take effect on the next poll.
 
 ## Where things live
@@ -115,7 +140,7 @@ See [SECURITY.md](SECURITY.md).
 Helpers stay inside the installed plugin rather than modifying your `PATH`:
 
 ```bash
-PLUGIN="$HOME/.config/omarchy/plugins/filen.storage"
+PLUGIN="$HOME/.config/omarchy/plugins/io.github.catalingb.filen"
 
 "$PLUGIN/bin/setup"                       # install / repair / re-provision
 "$PLUGIN/bin/setup" provision             # sign in and store the credential
@@ -149,10 +174,10 @@ RAM cache, stale FUSE, credential errors) is in
 ## Uninstall
 
 ```bash
-PLUGIN="$HOME/.config/omarchy/plugins/filen.storage"
+PLUGIN="$HOME/.config/omarchy/plugins/io.github.catalingb.filen"
 "$PLUGIN/bin/setup" --uninstall        # removes units; keeps your credential
 "$PLUGIN/bin/setup" --uninstall --purge # also deletes the credential
-omarchy plugin remove filen.storage
+omarchy plugin remove io.github.catalingb.filen
 ```
 
 Uninstalling never touches anything stored in Filen.
@@ -165,15 +190,20 @@ Uninstalling never touches anything stored in Filen.
   matrix and known limitations.
 - [docs/verification.md](docs/verification.md) — the automated suites and the
   live end-to-end checklist (`tests/e2e/live.sh`).
+- [docs/vm-testing.md](docs/vm-testing.md) — running that live checklist on a
+  fresh Omarchy in QEMU/KVM.
 - [docs/status-contract.md](docs/status-contract.md) — the status JSON and CLI
   invocation contract the panel consumes.
 - [docs/prerequisites.md](docs/prerequisites.md) — what the plugin installs and
   who owns it.
+- [docs/architecture.md](docs/architecture.md) — component and provisioning
+  diagrams.
 - [docs/pin-maintenance.md](docs/pin-maintenance.md) — how to bump the pinned
   `filen`/rclone versions, and what `setup doctor` reports.
 - [docs/release.md](docs/release.md) — the versioning/release runbook.
 - [docs/upstream-filen-rs-0.2.8-mount-panic.md](docs/upstream-filen-rs-0.2.8-mount-panic.md)
   — the draft upstream issue for the 0.2.8 mount panic.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup, tests, and conventions.
 - [SECURITY.md](SECURITY.md) — the security model.
 
 ## License

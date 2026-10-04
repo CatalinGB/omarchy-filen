@@ -11,9 +11,9 @@ import "Model.js" as Model
 // same thing without either of them polling.
 BarWidget {
   id: root
-  moduleName: "filen.storage"
+  moduleName: "io.github.catalingb.filen"
 
-  readonly property var filen: bar && bar.shell ? bar.shell.serviceFor("filen.storage") : null
+  readonly property var filen: bar && bar.shell ? bar.shell.serviceFor("io.github.catalingb.filen") : null
 
   // The service already folds its flags through Model.stateFor; reading it here
   // keeps the widget free of any state derivation of its own. With no service

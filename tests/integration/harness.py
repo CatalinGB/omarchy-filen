@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hermetic integration harness for the filen.storage plugin (H13).
+"""Hermetic integration harness for the io.github.catalingb.filen plugin (H13).
 
 Builds a throwaway ``HOME``/``XDG_*`` tree, drops fake ``systemctl``,
 ``systemd-creds``, ``curl``, ``mountpoint``, ``fusermount3`` and ``filen``
@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 SETUP = REPO / "bin" / "setup"
 STATUS = REPO / "bin" / "status"
 
-MARKER = "# Managed by the filen.storage Omarchy plugin; do not edit."
+MARKER = "# Managed by the io.github.catalingb.filen Omarchy plugin; do not edit."
 FILEN_VERSION = "0.2.9"
 
 # ------------------------------------------------------------------ fakes

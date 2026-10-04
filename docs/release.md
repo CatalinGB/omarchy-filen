@@ -1,6 +1,6 @@
 # Release runbook
 
-How `filen.storage` gets a version and reaches users. One release is
+How `io.github.catalingb.filen` gets a version and reaches users. One release is
 `manifest.json` version + a matching `CHANGELOG.md` entry + a `vX.Y.Z` tag.
 
 The plugin version and the pinned runtime versions are **independent**: the
@@ -49,17 +49,17 @@ Do not tag until all of these hold:
    `release: v0.2.0` (no tag yet). Run the automated suite once more.
 4. **Tag** the commit and push:
    ```bash
-   git tag -a v0.2.0 -m "filen.storage v0.2.0"
+   git tag -a v0.2.0 -m "io.github.catalingb.filen v0.2.0"
    git push origin v0.2.0
    ```
    Push the branch first; users fetch the default branch and read
    `manifest.json`.
 5. **Confirm `omarchy plugin update`** picks it up:
    ```bash
-   omarchy plugin update filen.storage
+   omarchy plugin update io.github.catalingb.filen
    ```
    This re-clones/pulls the plugin under
-   `~/.config/omarchy/plugins/filen.storage/` and reloads it. Verify the new
+   `~/.config/omarchy/plugins/io.github.catalingb.filen/` and reloads it. Verify the new
    `version` in `manifest.json` and that the bar/panel still come up. A version
    already current is a no-op.
 
