@@ -57,7 +57,9 @@ login**, no password ever typed into the panel.
   Nautilus.
 - **Mount / Unmount** — control the mount for this session.
 - **Mount at login** — toggle automatic mounting.
-- **Open Filen** — jump to the Filen web UI or a terminal.
+- **Open from the menu (optional)** — merge
+  [`contrib/omarchy-menu-filen.jsonc.example`](contrib/omarchy-menu-filen.jsonc.example)
+  to add web / terminal / mount entries to the Omarchy menu.
 
 The bar icon shows the state that most needs attention (failed → sign-in needed →
 stopped → mounted), so problems surface without opening the panel.

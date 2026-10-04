@@ -3,7 +3,8 @@
 
 This helper is deliberately credential-free and cheap. It only runs local
 probes -- the managed binary's presence, the credential blob's presence, the
-kernel mount table, and ``systemctl --user show`` -- plus a merge of the
+kernel mount table, ``systemctl --user show``, and ``systemctl --user
+is-enabled`` -- plus a merge of the
 non-secret API fragment the credentialed status timer writes. It never runs
 ``filen``, never opens a TTY, and never reads the credential's contents.
 
@@ -135,6 +136,19 @@ def unit_state(unit=MOUNT_UNIT):
     return state
 
 
+def auto_mount_enabled(unit=MOUNT_UNIT):
+    """True when the mount unit is enabled to start at login.
+
+    ``is-enabled`` exits non-zero for a disabled, masked, or absent unit and
+    prints the state otherwise. Only a literal ``enabled`` counts as autostart;
+    a missing unit is not an error here.
+    """
+    code, out = run(["systemctl", "--user", "is-enabled", unit])
+    if code != 0 or not out:
+        return False
+    return out.splitlines()[0].strip() == "enabled"
+
+
 def read_fragment(path):
     """Parse the non-secret API fragment; ``None`` when absent/unreadable."""
     try:
@@ -242,6 +256,7 @@ def build_status(
     api_max_age=API_MAX_AGE_SECONDS,
     now=None,
     mountinfo_path=MOUNTINFO_PATH,
+    auto_mount=False,
 ):
     """Assemble the credential-free status contract document."""
     now = int(now if now is not None else time.time())
@@ -279,6 +294,7 @@ def build_status(
         "statusText": status_text,
         "mountPath": str(mount_root),
         "unitState": state,
+        "autoMount": bool(auto_mount),
         "plan": None,
         "usedBytes": api["usedBytes"],
         "quotaBytes": api["quotaBytes"],
@@ -318,6 +334,7 @@ def collect(argv=None):
         expand(args.credential),
         runtime_filen_dir(args.runtime_dir),
         args.api_max_age,
+        auto_mount=auto_mount_enabled(),
     )
 
 

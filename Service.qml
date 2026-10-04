@@ -30,6 +30,7 @@ Item {
   property string statusText: ""
   property string mountPath: ""
   property string unitState: ""
+  property bool autoMount: false
   property var plan: null
   property double usedBytes: 0
   property double quotaBytes: 0
@@ -65,7 +66,13 @@ Item {
 
   readonly property string mountRoot: String(setting("mountRoot", "~/Filen"))
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 15, 5, 300)
+  readonly property int apiRefreshMin: intSetting("apiRefreshMin", 10, 5, 240)
   readonly property bool showLabel: setting("showLabel", false) === true
+
+  // The API fragment ages out at twice the refresh cadence, matching the status
+  // helper's API_MAX_AGE_SECONDS. Keeping the rule here lets the panel read one
+  // value instead of re-deriving it.
+  readonly property int staleAfterSec: apiRefreshMin * 120
 
   // ---------------------------------------------------------------- paths
   //
@@ -98,6 +105,7 @@ Item {
     statusText = String(parsed.statusText || "")
     mountPath = String(parsed.mountPath || "")
     unitState = String(parsed.unitState || "")
+    autoMount = parsed.autoMount === true
     plan = parsed.plan === undefined ? null : parsed.plan
     usedBytes = Number(parsed.usedBytes || 0)
     quotaBytes = Number(parsed.quotaBytes || 0)
@@ -152,10 +160,12 @@ Item {
     else if (state !== "needs-auth" && state !== "failed") mount()
   }
 
+  // Autostart only: this enables/disables the unit for future logins and must
+  // not start or stop the mount the user is using right now. Session control
+  // stays in mount()/unmount().
   function setAutoMount(on) {
     if (controlProcess.running) return
-    _pendingState = on ? "mounting" : "stopped"
-    runControl([on ? "enable" : "disable", "--now", "filen-mount.service"], "Could not change the login setting")
+    runControl([on ? "enable" : "disable", "filen-mount.service"], "Could not change the login setting")
   }
 
   // ---------------------------------------------------------------- timers

@@ -48,12 +48,10 @@ Panel {
   readonly property bool busy: hasService && filen.busy === true
   readonly property var remoteFiles: hasService && Array.isArray(filen.files) ? filen.files : []
 
-  // 2× the API cadence, matching the status helper's own API_MAX_AGE: the
-  // credentialed timer refreshes quota/recents slowly, and anything past this
-  // window is greyed so stale figures never read as live. `nowMs` is refreshed
-  // on a panel timer so the age is live, not frozen at open time.
-  readonly property int apiRefreshMin: Math.max(1, parseInt(String(setting("apiRefreshMin", 10)), 10) || 10)
-  readonly property real staleAfterSec: apiRefreshMin * 120
+  // The service owns the staleness rule (derived there from apiRefreshMin), so
+  // the panel reads one value rather than re-deriving it. `nowMs` is refreshed
+  // on a panel timer so the displayed age is live, not frozen at open time.
+  readonly property real staleAfterSec: hasService ? Number(filen.staleAfterSec || 1200) : 1200
   property double nowMs: Date.now()
 
   readonly property bool storageStale: {
@@ -91,10 +89,13 @@ Panel {
     return root.foreground
   }
 
-  // Service exposes no auto-mount getter, so the toggle carries its own
-  // desired value and forwards it to setAutoMount(). Mount-at-login is the
-  // default per the spec, so it starts on.
-  property bool autoMountOn: true
+  // The toggle reads the service's autoMount, with a short-lived optimistic
+  // override so the switch responds on click; the override clears once the
+  // service reports a new value.
+  property var autoMountOverride: null
+  readonly property bool autoMountOn: autoMountOverride === null
+    ? (hasService && filen.autoMount === true)
+    : autoMountOverride
 
   // ---------------------------------------------------------------- cursor
 
@@ -203,8 +204,8 @@ Panel {
 
   function toggleAutoMount() {
     if (!hasService || busy) return
-    autoMountOn = !autoMountOn
-    filen.setAutoMount(autoMountOn)
+    autoMountOverride = !root.autoMountOn
+    filen.setAutoMount(root.autoMountOn)
   }
 
   // Opens Nautilus at the file's parent; mirrors the cloud/dropbox reference.
@@ -275,8 +276,7 @@ Panel {
   }
 
   function openFromHotkey() {
-    root.controller.show()
-    handleOpened()
+    root.open()
   }
 
   function close() {
@@ -299,6 +299,12 @@ Panel {
   onSettingsChanged: syncService()
   onRemoteFilesChanged: ensureCursor()
   onFocusSectionChanged: scrollCursorIntoView()
+
+  // A freshly polled autoMount supersedes the optimistic toggle value.
+  Connections {
+    target: root.filen
+    function onAutoMountChanged() { root.autoMountOverride = null }
+  }
 
   IpcHandler {
     target: root.ipcTarget
@@ -625,7 +631,7 @@ Panel {
             }
             InfoPair {
               label: "Storage refresh"
-              value: String(root.apiRefreshMin) + " min"
+              value: String(root.hasService ? root.filen.apiRefreshMin : root.setting("apiRefreshMin", 10)) + " min"
             }
             InfoPair {
               label: "Cache limit"

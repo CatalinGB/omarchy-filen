@@ -276,6 +276,30 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(list(self.h.unit_dir.iterdir()), [])
         self.assertFalse(self.h.credential.exists())
 
+    def test_uninstall_flag_keeps_credential_by_default(self):
+        self.h.seed_binaries()
+        self.h.run("install")
+        self.h.credential.parent.mkdir(parents=True, exist_ok=True)
+        self.h.credential.write_text("blob", encoding="utf-8")
+
+        result = self.h.run("--uninstall")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(list(self.h.unit_dir.iterdir()), [])
+        self.assertTrue(self.h.credential.exists())
+
+    def test_uninstall_flag_with_purge_removes_credential(self):
+        self.h.seed_binaries()
+        self.h.run("install")
+        self.h.credential.parent.mkdir(parents=True, exist_ok=True)
+        self.h.credential.write_text("blob", encoding="utf-8")
+
+        result = self.h.run("--uninstall", "--purge")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(list(self.h.unit_dir.iterdir()), [])
+        self.assertFalse(self.h.credential.exists())
+
     def test_uninstall_refuses_foreign_unit(self):
         self.h.unit_dir.mkdir(parents=True, exist_ok=True)
         foreign = self.h.unit_dir / "filen-mount.service"

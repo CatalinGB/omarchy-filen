@@ -10,6 +10,7 @@
 #                             it as a systemd user credential (shred plaintext).
 #   setup uninstall           Remove the generated units (keep the credential).
 #   setup uninstall --purge   Also delete the stored credential.
+#   setup --uninstall [--purge]  Flag form of the above.
 #   setup check               Report missing prerequisites (exit 1 if any).
 #   setup export-fragment ... Credentialed producer run by filen-status.service.
 #
@@ -65,6 +66,7 @@ Usage: setup [COMMAND]
   (no command) / install    Install filen, pre-seed rclone, write units.
   provision                 Sign in and store the encrypted credential.
   uninstall [--purge]       Remove generated units (--purge also credential).
+  --uninstall [--purge]     Alias for 'uninstall'.
   check                     Report missing prerequisites.
   help                      Show this help.
 EOF
@@ -493,6 +495,8 @@ cmd_provision() {
   }
   trap cleanup_provision EXIT
 
+  warn "Omarchy's keyring is passwordless and plaintext at rest; this plugin"
+  warn "stores your Filen credential as a systemd-encrypted blob instead."
   say "Sign in to Filen (email/password/2FA). A temporary auth config is written"
   say "to a private directory and shredded immediately after encryption."
   ( cd "$tmp" && "$FILEN_BIN" --skip-update --config-dir "$config" export-auth-config )
@@ -674,7 +678,7 @@ main() {
   case "$command" in
     install|"")        cmd_install "$@" ;;
     provision)         cmd_provision "$@" ;;
-    uninstall)         cmd_uninstall "${1:-}" ;;
+    uninstall|--uninstall) cmd_uninstall "${1:-}" ;;
     check|doctor)      cmd_check ;;
     export-fragment)   cmd_export_fragment "$@" ;;
     render-unit)       render_unit "${1:-}" ;;

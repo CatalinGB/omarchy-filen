@@ -1,12 +1,9 @@
 .pragma library
 
-var GLYPH_CLOUD = "󰅟"
 var GLYPH_MOUNTED = "󰅠"
 var GLYPH_MOUNTING = "󰘿"
 var GLYPH_STOPPED = "󰅤"
 var GLYPH_ALERT = "󰧠"
-
-var SEVERITY = ["failed", "needs-auth", "mounting", "stopped", "mounted"]
 
 function defaultStatus() {
   return {
@@ -17,6 +14,7 @@ function defaultStatus() {
     statusText: "Unavailable",
     mountPath: "",
     unitState: "",
+    autoMount: false,
     plan: null,
     usedBytes: 0,
     quotaBytes: 0,
@@ -152,12 +150,10 @@ function formatRelativeTime(timestampSec, nowMs) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    GLYPH_CLOUD: GLYPH_CLOUD,
     GLYPH_MOUNTED: GLYPH_MOUNTED,
     GLYPH_MOUNTING: GLYPH_MOUNTING,
     GLYPH_STOPPED: GLYPH_STOPPED,
     GLYPH_ALERT: GLYPH_ALERT,
-    SEVERITY: SEVERITY,
     defaultStatus: defaultStatus,
     parseStatus: parseStatus,
     formatBytes: formatBytes,
