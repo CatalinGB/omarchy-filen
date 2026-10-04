@@ -29,7 +29,7 @@ The popup surface: status, quota, recents, and controls. Opened from the bar
 widget.
 
 **Service**:
-The generated systemd user units — `filen-mount.service` and
+The generated systemd user units — `omarchy-filen-mount.service` and
 `filen-status.{timer,service}` — that own authentication and the mount.
 _Avoid_: "service" for Omarchy's manifest `service` kind (an in-shell QML
 singleton); call that a **QML service singleton**.
@@ -56,7 +56,7 @@ The one-time flow that produces the credential: interactive `filen` login →
 `systemd-creds encrypt --user` → shred.
 
 **Mount unit**:
-`filen-mount.service` — the systemd user unit running the FUSE mount.
+`omarchy-filen-mount.service` — the systemd user unit running the FUSE mount.
 
 **Status timer**:
 `filen-status.timer` (with its oneshot service) — the slow, credentialed producer

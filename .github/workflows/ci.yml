@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Python unit tests
+        run: python3 -m unittest discover -s tests
+
+      - name: Model tests
+        run: node tests/model.test.js
+
+      - name: shellcheck (if available)
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            # bin/status is Python, so shellcheck only sees the shell scripts.
+            # Fail on warnings/errors; info-level notes vary by shellcheck version.
+            shellcheck --severity=warning bin/setup tests/e2e/live.sh
+          else
+            echo "shellcheck not installed; skipping"
+          fi
+
+      - name: QML syntax (if a Qt tool is available)
+        run: |
+          if command -v qmllint >/dev/null 2>&1; then
+            for qml in BarWidget.qml Panel.qml Service.qml; do
+              qmllint --bare "$qml" || exit 1
+            done
+          elif command -v qmlformat >/dev/null 2>&1; then
+            for qml in BarWidget.qml Panel.qml Service.qml; do
+              qmlformat "$qml" >/dev/null || exit 1
+            done
+          else
+            echo "no qmllint/qmlformat on PATH; skipping QML syntax check"
+          fi
+
+      - name: Validate plugin (if omarchy available)
+        run: |
+          if command -v omarchy >/dev/null 2>&1; then
+            omarchy plugin validate .
+          else
+            echo "omarchy not installed; skipping manifest validation"
+          fi

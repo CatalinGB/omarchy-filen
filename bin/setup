@@ -1,0 +1,1097 @@
+#!/usr/bin/env bash
+#
+# bin/setup -- idempotent install / uninstall / provisioning for the
+# filen.storage Omarchy plugin.
+#
+#   setup                     Install the pinned filen binary, pre-seed rclone,
+#                             write the systemd user units, daemon-reload.
+#   setup install             Same as above (explicit).
+#   setup provision           Interactive: export the Filen auth config, encrypt
+#                             it as a systemd user credential (shred plaintext).
+#   setup uninstall           Remove the generated units (keep the credential).
+#   setup uninstall --purge   Also delete the stored credential.
+#   setup --uninstall [--purge]  Flag form of the above.
+#   setup check               Report missing prerequisites (exit 1 if any).
+#   setup export-fragment ... Credentialed producer run by filen-status.service.
+#
+# Hidden, side-effect-free helpers used by the test suite:
+#   setup render-unit NAME
+#   setup asset-name [ARCH] [LIBC]
+#   setup rclone-target [ARCH]
+#   setup check-marker FILE
+#   setup wait-mount MOUNT_ROOT [TIMEOUT]
+#
+set -euo pipefail
+
+PLUGIN_ID="filen.storage"
+MANAGED_MARKER="# Managed by the filen.storage Omarchy plugin; do not edit."
+FILEN_VERSION="0.2.9"
+FILEN_RELEASES_REPO="FilenCloudDienste/filen-cli-releases"
+RCLONE_VERSION="1.74.2"
+# Embedded from filen-rclone-wrapper/src/rclone_installation.rs (v0.2.8).
+RCLONE_CHECKSUM_LINUX_AMD64="72a806370072015ccbe4d81bcd348cc5eaf3beca6c65ba693fd43fb31fcca5b1"
+RCLONE_CHECKSUM_LINUX_ARM64="bc2b2eb8269b743ed7bcea869f3782cfb4931e41efa53fc8befc6dc8308b7a50"
+
+SELF="$(realpath "${BASH_SOURCE[0]}")"
+
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+DATA_DIR="${XDG_DATA_HOME}/omarchy-filen"
+FILEN_BIN="${DATA_DIR}/bin/filen"
+RCLONE_DIR="${DATA_DIR}/rclone"
+UNIT_DIR="${XDG_CONFIG_HOME}/systemd/user"
+CRED_DIR="${XDG_CONFIG_HOME}/credstore.encrypted"
+CREDENTIAL="${CRED_DIR}/filen-auth"
+SETTINGS_FILE="${XDG_CONFIG_HOME}/omarchy-filen/settings.conf"
+API_FRAGMENT="${XDG_RUNTIME_DIR}/filen/api-status.json"
+
+RECENTS="${OMARCHY_FILEN_RECENTS:-15}"
+
+RELOAD_NEEDED=0
+
+MOUNT_UNIT="omarchy-filen-mount.service"
+STATUS_UNIT="filen-status.service"
+STATUS_TIMER="filen-status.timer"
+ALL_UNITS=("$MOUNT_UNIT" "$STATUS_UNIT" "$STATUS_TIMER")
+
+# ------------------------------------------------------------------ output
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'setup: warning: %s\n' "$*" >&2; }
+die()  { printf 'setup: error: %s\n' "$*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+  cat <<EOF
+Usage: setup [COMMAND]
+
+  (no command) / install    Install filen, pre-seed rclone, write units.
+  update | repair           Re-download the pinned filen and regenerate units.
+  settings [KEY=VALUE ...]  Read/modify settings; keys are MOUNT_ROOT, CACHE_SIZE
+                            (an rclone size such as 4G) and API_REFRESH_MIN
+                            (positive integer minutes between status refreshes).
+  refresh-timer             Re-render ${STATUS_TIMER} from API_REFRESH_MIN and
+                            apply the new cadence (used by the panel).
+  mount-run --config-dir D --auth-config-path P
+                            Internal: source settings, then exec the mount.
+  provision                 Sign in and store the encrypted credential.
+  uninstall [--purge]       Remove generated units (--purge also credential).
+  --uninstall [--purge]     Alias for 'uninstall'.
+  check                     Report missing prerequisites.
+  doctor                    Report pin/install/mount health (1 if unhealthy).
+  help                      Show this help.
+EOF
+}
+
+# ------------------------------------------------------------- pure helpers
+
+detect_arch_label() {
+  case "$(uname -m)" in
+    x86_64|amd64)   printf 'x86_64\n' ;;
+    aarch64|arm64)  printf 'aarch64\n' ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+}
+
+detect_rclone_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)  printf 'amd64\n' ;;
+    aarch64|arm64) printf 'arm64\n' ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+}
+
+detect_libc() {
+  if have ldd && ldd --version 2>&1 | grep -qi musl; then
+    printf 'musl\n'
+  else
+    printf 'gnu\n'
+  fi
+}
+
+# Release asset for the pinned filen build, e.g.
+#   filen-cli-0.2.8-x86_64-unknown-linux-gnu
+asset_name() {
+  local arch="${1:-}" libc="${2:-}"
+  [[ -n "$arch" ]] || arch="$(detect_arch_label)"
+  [[ -n "$libc" ]] || libc="$(detect_libc)"
+  case "$arch" in x86_64|aarch64) ;; *) die "unsupported architecture: $arch" ;; esac
+  case "$libc" in gnu|musl) ;; *) die "unsupported libc: $libc" ;; esac
+  printf 'filen-cli-%s-%s-unknown-linux-%s\n' "$FILEN_VERSION" "$arch" "$libc"
+}
+
+# The exact filename filen-rs expects under --config-dir for its managed
+# rclone, e.g. rclone-v1.74.2-linux-amd64.
+rclone_arch_label() {
+  local arch="${1:-}"
+  [[ -n "$arch" ]] || arch="$(detect_rclone_arch)"
+  case "$arch" in
+    x86_64|amd64)  printf 'amd64\n' ;;
+    aarch64|arm64) printf 'arm64\n' ;;
+    *) die "unsupported rclone architecture: $arch" ;;
+  esac
+}
+
+rclone_target() {
+  printf 'rclone-v%s-linux-%s\n' "$RCLONE_VERSION" "$(rclone_arch_label "$@")"
+}
+
+rclone_checksum() {
+  case "$(rclone_arch_label)" in
+    amd64) printf '%s\n' "$RCLONE_CHECKSUM_LINUX_AMD64" ;;
+    arm64) printf '%s\n' "$RCLONE_CHECKSUM_LINUX_ARM64" ;;
+  esac
+}
+
+# Quote a value for use as a systemd ExecStart argument.
+systemd_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//%/%%}"
+  printf '"%s"' "$value"
+}
+
+# A unit is "ours" only if it is a regular file carrying the exact marker line.
+unit_file_is_managed() {
+  local file="$1"
+  [[ -f "$file" && ! -L "$file" ]] || return 1
+  grep -Fqx "$MANAGED_MARKER" "$file" 2>/dev/null
+}
+
+sha256_of() {
+  python3 -c '
+import hashlib, sys
+h = hashlib.sha256()
+with open(sys.argv[1], "rb") as fh:
+    for chunk in iter(lambda: fh.read(1 << 20), b""):
+        h.update(chunk)
+print(h.hexdigest())
+' "$1"
+}
+
+systemd_version() {
+  local out=""
+  if have systemd-creds; then
+    out="$(systemd-creds --version 2>/dev/null | head -n1 || true)"
+  fi
+  [[ -n "$out" ]] || out="$(systemd --version 2>/dev/null | head -n1 || true)"
+  printf '%s\n' "$out" | grep -oE '[0-9]+' | head -n1
+}
+
+# ------------------------------------------------------------- unit render
+
+render_mount_unit() {
+  local setup_q
+  setup_q="$(systemd_quote "$SELF")"
+  cat <<EOF
+$MANAGED_MARKER
+[Unit]
+Description=Filen network drive (managed rclone)
+Documentation=https://github.com/FilenCloudDienste/filen-rs
+ConditionPathExists=%E/credstore.encrypted/filen-auth
+After=graphical-session.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+LoadCredentialEncrypted=filen-auth
+# Note: do NOT add RuntimeDirectory here. On systemd 261 a unit with both
+# RuntimeDirectory and LoadCredentialEncrypted fails credential setup with
+# "File exists"; the wrapper creates %t/filen itself. See ADR 0005.
+ExecStartPre=/usr/bin/mkdir -p %t/filen
+ExecStart=$setup_q mount-run --config-dir %t/filen --auth-config-path %d/filen-auth
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+# filen's graceful shutdown handler is SIGINT-only, so send SIGINT to unmount
+# cleanly; the post-stop hook detaches a stale FUSE mount if it did not.
+KillSignal=SIGINT
+ExecStopPost=$setup_q cleanup
+TimeoutStopSec=30
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+}
+
+render_status_unit() {
+  local setup_q filen_q
+  setup_q="$(systemd_quote "$SELF")"
+  filen_q="$(systemd_quote "$FILEN_BIN")"
+  cat <<EOF
+$MANAGED_MARKER
+[Unit]
+Description=Filen status fragment (quota and recent files)
+Documentation=https://github.com/FilenCloudDienste/filen-rs
+ConditionPathExists=%E/credstore.encrypted/filen-auth
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+LoadCredentialEncrypted=filen-auth
+ExecStartPre=/usr/bin/mkdir -p %t/filen
+ExecStart=$setup_q export-fragment --filen $filen_q --config-dir %t/filen --auth-config-path %d/filen-auth --out %t/filen/api-status.json --recents $RECENTS
+EOF
+}
+
+render_status_timer() {
+  load_settings
+  cat <<EOF
+$MANAGED_MARKER
+[Unit]
+Description=Periodically refresh the Filen status fragment
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=${API_REFRESH_MIN}min
+AccuracySec=1min
+Persistent=false
+Unit=${STATUS_UNIT}
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+render_unit() {
+  case "${1:-}" in
+    filen-mount|"$MOUNT_UNIT")             render_mount_unit ;;
+    status-service|"$STATUS_UNIT")         render_status_unit ;;
+    status-timer|"$STATUS_TIMER")          render_status_timer ;;
+    *) die "unknown unit: ${1:-} (mount|status-service|status-timer)" ;;
+  esac
+}
+
+# ---------------------------------------------------------------- systemd
+
+daemon_reload() {
+  if ! have systemctl; then
+    warn "systemctl not found; skipping daemon-reload"
+    return 0
+  fi
+  if systemctl --user daemon-reload; then
+    say "Reloaded the systemd user manager."
+  else
+    warn "systemctl --user daemon-reload failed"
+  fi
+  return 0
+}
+
+# Poll for the mount to appear, bounded by TIMEOUT seconds (default 30). Also
+# gives up early when the mount unit has landed in `failed`. Prints a clear
+# "Mounted" line on success; on timeout prints an actionable hint and returns
+# non-zero. Never blocks longer than TIMEOUT. This is the smoke check run by
+# `provision`, and a hidden test helper (`wait-mount`).
+wait_for_mount() {
+  local mount_root="$1" timeout="${2:-30}" waited=0 state=""
+  while :; do
+    if mountpoint -q "$mount_root" 2>/dev/null; then
+      say "Mounted: $mount_root"
+      return 0
+    fi
+    if have systemctl; then
+      state="$(systemctl --user show -p ActiveState --value "$MOUNT_UNIT" 2>/dev/null || true)"
+      if [[ "$state" == "failed" ]]; then
+        break
+      fi
+    fi
+    if (( waited >= timeout )); then
+      break
+    fi
+    sleep 1
+    waited=$(( waited + 1 ))
+  done
+  warn "the mount at $mount_root did not come up within ${timeout}s."
+  warn "inspect the service log:"
+  warn "  journalctl --user -u ${MOUNT_UNIT}"
+  warn "if the credential was rejected, re-run '$(basename "$SELF") provision'."
+  return 1
+}
+
+write_unit() {
+  local name="$1" content="$2" file tmp
+  file="${UNIT_DIR}/${name}"
+  if [[ -e "$file" || -L "$file" ]]; then
+    unit_file_is_managed "$file" ||
+      die "refusing to overwrite a unit not owned by ${PLUGIN_ID}: $file"
+  fi
+  mkdir -p "$UNIT_DIR"
+  tmp="$(mktemp "${UNIT_DIR}/.${name}.XXXXXX")"
+  printf '%s\n' "$content" > "$tmp"
+  chmod 0644 "$tmp"
+  if [[ -f "$file" ]] && cmp -s "$tmp" "$file"; then
+    rm -f "$tmp"
+    say "Unchanged: $file"
+    return 0
+  fi
+  mv "$tmp" "$file"
+  say "Installed $file"
+  RELOAD_NEEDED=1
+  return 0
+}
+
+precheck_units() {
+  local name file
+  for name in "${ALL_UNITS[@]}"; do
+    file="${UNIT_DIR}/${name}"
+    if [[ -e "$file" || -L "$file" ]]; then
+      unit_file_is_managed "$file" ||
+        die "refusing to overwrite a unit not owned by ${PLUGIN_ID}: $file"
+    fi
+  done
+  return 0
+}
+
+install_units() {
+  RELOAD_NEEDED=0
+  write_unit "$MOUNT_UNIT"   "$(render_mount_unit)"
+  write_unit "$STATUS_UNIT"  "$(render_status_unit)"
+  write_unit "$STATUS_TIMER" "$(render_status_timer)"
+  if (( RELOAD_NEEDED )); then
+    daemon_reload
+  else
+    say "systemd units already up to date."
+  fi
+  enable_status_timer
+}
+
+enable_status_timer() {
+  have systemctl || return 0
+  if systemctl --user enable --now "$STATUS_TIMER" >/dev/null 2>&1; then
+    say "Enabled ${STATUS_TIMER}."
+  else
+    warn "could not enable ${STATUS_TIMER}"
+  fi
+  return 0
+}
+
+# Re-render the status timer after API_REFRESH_MIN changes and apply the new
+# cadence. Safe to run any time; the mount unit is never touched.
+cmd_refresh_timer() {
+  load_settings
+  write_unit "$STATUS_TIMER" "$(render_status_timer)"
+  daemon_reload
+  if have systemctl && systemctl --user is-active --quiet "$STATUS_TIMER"; then
+    if systemctl --user restart "$STATUS_TIMER"; then
+      say "Restarted ${STATUS_TIMER}."
+    else
+      warn "could not restart ${STATUS_TIMER}"
+    fi
+  fi
+  return 0
+}
+
+# --------------------------------------------------------------- prereqs
+
+require_for_install() {
+  have curl || die "curl is required to download the filen binary"
+  have python3 || die "python3 is required (would be used for checksums/extraction)"
+  local version
+  version="$(systemd_version)"
+  if [[ -z "$version" || "$version" -lt 256 ]]; then
+    die "systemd >= 256 is required (systemd-creds encrypt --user); found ${version:-none}"
+  fi
+  have fusermount3 ||
+    warn "fusermount3 (fuse3) not found; the mount will not work until fuse3 is installed"
+  return 0
+}
+
+cmd_check() {
+  local missing=0 version
+  if have fusermount3; then
+    say "ok      fuse3 (fusermount3)"
+  else
+    say "missing fuse3 (fusermount3)"; missing=1
+  fi
+  if have python3; then
+    say "ok      python3"
+  else
+    say "missing python3"; missing=1
+  fi
+  version="$(systemd_version)"
+  if [[ -n "$version" && "$version" -ge 256 ]]; then
+    say "ok      systemd ${version} (>= 256)"
+  else
+    say "missing systemd >= 256 (found ${version:-none})"; missing=1
+  fi
+  if have curl; then
+    say "ok      curl"
+  else
+    say "missing curl"; missing=1
+  fi
+  return "$missing"
+}
+
+# Report install health: pinned vs installed filen, the rclone seed, the unit
+# files, the credential, and the mount unit state. Non-zero when the install is
+# unhealthy so it can gate scripted checks (H19).
+cmd_doctor() {
+  local unhealthy=0 installed version_file target seed unit file state
+  local result main_status checked
+  version_file="${DATA_DIR}/filen.version"
+
+  if [[ -x "$FILEN_BIN" ]]; then
+    installed="$(cat "$version_file" 2>/dev/null || true)"
+    if [[ "$installed" == "$FILEN_VERSION" ]]; then
+      say "ok      filen ${FILEN_VERSION} (installed)"
+    else
+      say "stale   filen pinned ${FILEN_VERSION}, installed ${installed:-none}"
+      unhealthy=1
+    fi
+  else
+    say "missing filen binary at ${FILEN_BIN} (run 'setup install')"
+    unhealthy=1
+  fi
+
+  target="$(rclone_target)"
+  seed="${RCLONE_DIR}/${target}"
+  if [[ -x "$seed" ]]; then
+    say "ok      rclone seed ${target}"
+  else
+    say "missing rclone seed ${target}"
+    unhealthy=1
+  fi
+
+  for unit in "${ALL_UNITS[@]}"; do
+    file="${UNIT_DIR}/${unit}"
+    if [[ -f "$file" ]]; then
+      say "ok      unit ${unit}"
+    else
+      say "missing unit ${unit} (run 'setup install')"
+      unhealthy=1
+    fi
+  done
+
+  if [[ -e "$CREDENTIAL" ]]; then
+    say "ok      credential present"
+  else
+    say "missing credential (run 'setup provision')"
+    unhealthy=1
+  fi
+
+  if have systemctl; then
+    state="$(systemctl --user show -p ActiveState --value "$MOUNT_UNIT" 2>/dev/null || true)"
+    [[ -n "$state" ]] || state="unknown"
+    say "mount   ${MOUNT_UNIT}: ${state}"
+    [[ "$state" == "failed" ]] && unhealthy=1
+    # The last run's outcome: a unit can be "active" but have a failed ExecMain;
+    # result and exit status make that visible (H19).
+    result="$(systemctl --user show -p Result --value "$MOUNT_UNIT" 2>/dev/null || true)"
+    main_status="$(systemctl --user show -p ExecMainStatus --value "$MOUNT_UNIT" 2>/dev/null || true)"
+    say "result  ${MOUNT_UNIT}: Result=${result:-unknown} ExecMainStatus=${main_status:-unknown}"
+  else
+    say "mount   unknown (systemctl not found)"
+  fi
+
+  # The API fragment's checkedAt is the last successful refresh the timer wrote.
+  if [[ -f "$API_FRAGMENT" ]]; then
+    checked="$(python3 -c 'import json, sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        doc = json.load(handle)
+except Exception:
+    raise SystemExit
+value = doc.get("checkedAt") if isinstance(doc, dict) else None
+if isinstance(value, (int, float)) and not isinstance(value, bool):
+    print(int(value))
+' "$API_FRAGMENT" 2>/dev/null || true)"
+    [[ -n "$checked" && "$checked" != "0" ]] || checked="unknown"
+    say "refresh api-status.json: checkedAt=${checked}"
+  fi
+
+  if (( unhealthy )); then
+    say "doctor: unhealthy"
+    return 1
+  fi
+  say "doctor: healthy"
+  return 0
+}
+
+# ----------------------------------------------------------------- filen
+
+expected_filen_digest() {
+  local asset="$1"
+  if [[ -n "${OMARCHY_FILEN_SHA256:-}" ]]; then
+    printf '%s\n' "$OMARCHY_FILEN_SHA256"
+    return 0
+  fi
+  have curl || return 1
+  curl -fsSL "https://api.github.com/repos/${FILEN_RELEASES_REPO}/releases/tags/${FILEN_VERSION}" 2>/dev/null |
+    python3 -c '
+import json, sys
+name = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+for asset in data.get("assets", []):
+    if asset.get("name") == name:
+        digest = (asset.get("digest") or "").replace("sha256:", "")
+        if digest:
+            print(digest)
+        break
+' "$asset"
+}
+
+install_filen() {
+  local version_file="${DATA_DIR}/filen.version"
+  if [[ -x "$FILEN_BIN" ]] && [[ "$(cat "$version_file" 2>/dev/null || true)" == "$FILEN_VERSION" ]]; then
+    say "filen ${FILEN_VERSION} already installed at $FILEN_BIN (skipping download)."
+    return 0
+  fi
+  local asset url digest actual tmp
+  asset="$(asset_name)"
+  url="https://github.com/${FILEN_RELEASES_REPO}/releases/download/${FILEN_VERSION}/${asset}"
+  mkdir -p "$(dirname "$FILEN_BIN")"
+  tmp="$(mktemp "${DATA_DIR}/.filen.XXXXXX")"
+  say "Downloading ${asset} ..."
+  if ! curl -fSL --retry 3 -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    die "download failed: $url"
+  fi
+  digest="$(expected_filen_digest "$asset" || true)"
+  if [[ -n "$digest" ]]; then
+    actual="$(sha256_of "$tmp")"
+    if [[ "$actual" != "$digest" ]]; then
+      rm -f "$tmp"
+      die "checksum mismatch for ${asset} (expected ${digest}, got ${actual})"
+    fi
+  else
+    warn "no release checksum available for ${asset}; skipping verification"
+  fi
+  chmod 0755 "$tmp"
+  mv "$tmp" "$FILEN_BIN"
+  printf '%s\n' "$FILEN_VERSION" > "$version_file"
+  say "Installed filen ${FILEN_VERSION} at ${FILEN_BIN}."
+}
+
+# ---------------------------------------------------------------- rclone
+
+seed_rclone() {
+  local target checksum url tmpdir actual
+  target="$(rclone_target)"
+  if [[ -x "${RCLONE_DIR}/${target}" ]]; then
+    say "rclone ${RCLONE_VERSION} already pre-seeded (skipping download)."
+    return 0
+  fi
+  if ! have curl || ! have python3; then
+    warn "curl/python3 missing; skipping rclone pre-seed (the mount will fetch it)"
+    return 0
+  fi
+  checksum="$(rclone_checksum)"
+  url="https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/${target}.zip"
+  mkdir -p "$RCLONE_DIR"
+  tmpdir="$(mktemp -d)"
+  say "Pre-seeding rclone ${RCLONE_VERSION} ..."
+  if ! curl -fSL --retry 3 -o "${tmpdir}/${target}.zip" "$url"; then
+    warn "could not download rclone; the mount will fetch it on first start"
+    rm -rf "$tmpdir"
+    return 0
+  fi
+  actual="$(sha256_of "${tmpdir}/${target}.zip")"
+  if [[ "$actual" != "$checksum" ]]; then
+    warn "rclone checksum mismatch; skipping pre-seed"
+    rm -rf "$tmpdir"
+    return 0
+  fi
+  python3 - "${tmpdir}/${target}.zip" "${target}/rclone" "${RCLONE_DIR}/${target}" <<'PY'
+import os, shutil, sys, zipfile
+zip_path, member, dest = sys.argv[1], sys.argv[2], sys.argv[3]
+with zipfile.ZipFile(zip_path) as archive, archive.open(member) as src, open(dest, "wb") as out:
+    shutil.copyfileobj(src, out)
+os.chmod(dest, 0o755)
+PY
+  rm -rf "$tmpdir"
+  say "Pre-seeded rclone at ${RCLONE_DIR}/${target}."
+}
+
+# --------------------------------------------------------------- settings
+
+# Source the settings file (if any) over env-provided defaults, then expand a
+# leading ~ in MOUNT_ROOT. Sets MOUNT_ROOT, CACHE_SIZE and API_REFRESH_MIN.
+load_settings() {
+  MOUNT_ROOT="${OMARCHY_FILEN_MOUNT_ROOT:-$HOME/Filen}"
+  CACHE_SIZE="${OMARCHY_FILEN_CACHE_SIZE:-4G}"
+  API_REFRESH_MIN="${OMARCHY_FILEN_API_REFRESH_MIN:-10}"
+  if [[ -f "$SETTINGS_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$SETTINGS_FILE"
+  fi
+  # "~/" below is a literal match, not a tilde to expand.
+  # shellcheck disable=SC2088
+  case "$MOUNT_ROOT" in
+    "~")   MOUNT_ROOT="$HOME" ;;
+    "~/"*) MOUNT_ROOT="${HOME}/${MOUNT_ROOT#\~/}" ;;
+  esac
+}
+
+# Double-quote a value so the settings file stays shell-sourceable.
+shell_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//\$/\\\$}"
+  value="${value//\`/\\\`}"
+  printf '"%s"' "$value"
+}
+
+write_settings() {
+  local dir tmp
+  dir="$(dirname "$SETTINGS_FILE")"
+  mkdir -p "$dir"
+  if [[ -e "$SETTINGS_FILE" || -L "$SETTINGS_FILE" ]]; then
+    unit_file_is_managed "$SETTINGS_FILE" ||
+      die "refusing to overwrite settings not owned by ${PLUGIN_ID}: $SETTINGS_FILE"
+  fi
+  tmp="$(mktemp "${dir}/.settings.conf.XXXXXX")"
+  {
+    printf '%s\n' "$MANAGED_MARKER"
+    printf 'MOUNT_ROOT=%s\n' "$(shell_quote "$MOUNT_ROOT")"
+    printf 'CACHE_SIZE=%s\n' "$(shell_quote "$CACHE_SIZE")"
+    printf 'API_REFRESH_MIN=%s\n' "$(shell_quote "$API_REFRESH_MIN")"
+  } > "$tmp"
+  chmod 0600 "$tmp"
+  mv "$tmp" "$SETTINGS_FILE"
+  say "Wrote settings to $SETTINGS_FILE"
+}
+
+is_positive_int() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
+}
+
+cmd_settings() {
+  load_settings
+  local pair key value
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    value="${pair#*=}"
+    case "$key" in
+      MOUNT_ROOT) MOUNT_ROOT="$value" ;;
+      CACHE_SIZE) CACHE_SIZE="$value" ;;
+      API_REFRESH_MIN)
+        is_positive_int "$value" ||
+          die "settings: API_REFRESH_MIN must be a positive integer (got: ${value:-empty})"
+        API_REFRESH_MIN="$value"
+        ;;
+      *) die "settings: unknown key: ${key:-$pair} (expected MOUNT_ROOT=..., CACHE_SIZE=... or API_REFRESH_MIN=...)" ;;
+    esac
+  done
+  write_settings
+}
+
+# Internal: sourced from the settings file, then exec the mount. --print is a
+# side-effect-free dry run used only by the test suite.
+cmd_mount_run() {
+  local config_dir="" auth="" print_only=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --config-dir)       config_dir="${2:?--config-dir needs a value}"; shift 2 ;;
+      --auth-config-path) auth="${2:?--auth-config-path needs a value}"; shift 2 ;;
+      --print|--dry-run)  print_only=1; shift ;;
+      *) die "mount-run: unknown argument: $1" ;;
+    esac
+  done
+  [[ -n "$config_dir" ]] || die "mount-run: --config-dir is required"
+  [[ -n "$auth" ]] || die "mount-run: --auth-config-path is required"
+  load_settings
+  if (( print_only )); then
+    printf '%s\n' \
+      "$FILEN_BIN" --skip-update --config-dir "$config_dir" --auth-config-path "$auth" \
+      mount --cache-size "$CACHE_SIZE" "$MOUNT_ROOT"
+    return 0
+  fi
+  # A crash can leave the FUSE transport dead while the kernel still records a
+  # mount; clear that before mounting. A live mount is skipped (mountpoint -q
+  # succeeds), so this never unmounts a healthy drive.
+  if ! mountpoint -q "$MOUNT_ROOT" 2>/dev/null; then
+    if have fusermount3; then fusermount3 -uz "$MOUNT_ROOT" 2>/dev/null || true; fi
+  fi
+  # filen-rs looks for its managed rclone at
+  #   <config-dir>/rclone/<rclone-name>
+  # so pre-seed that exact path from our persistent copy. Without it, filen
+  # tries to download rclone at unit start and panics.
+  local rclone_name seed
+  rclone_name="$(rclone_target)"
+  seed="${RCLONE_DIR}/${rclone_name}"
+  mkdir -p "${config_dir}/rclone"
+  if [[ -x "$seed" ]]; then
+    ln -sf "$seed" "${config_dir}/rclone/${rclone_name}"
+  else
+    warn "rclone pre-seed missing at ${seed}; filen will try to download it"
+  fi
+  exec "$FILEN_BIN" --skip-update --config-dir "$config_dir" --auth-config-path "$auth" \
+    mount --cache-size "$CACHE_SIZE" "$MOUNT_ROOT"
+}
+
+# ExecStopPost hook: detach a stale FUSE mount after the unit stops. Idempotent.
+cmd_cleanup() {
+  load_settings
+  have fusermount3 && fusermount3 -uz "$MOUNT_ROOT" 2>/dev/null || true
+  return 0
+}
+
+# --------------------------------------------------------------- commands
+
+cmd_install() {
+  require_for_install
+  precheck_units
+  install_filen
+  seed_rclone
+  if [[ ! -f "$SETTINGS_FILE" ]]; then
+    load_settings
+    write_settings
+  fi
+  install_units
+  if [[ ! -f "$CREDENTIAL" ]]; then
+    say "Next: run '$(basename "$SELF") provision' in a terminal to sign in to Filen."
+  fi
+}
+
+cmd_provision() {
+  [[ -x "$FILEN_BIN" ]] || die "the filen binary is missing; run 'setup install' first"
+  have systemd-creds || die "systemd-creds is required (systemd >= 256)"
+  local version
+  version="$(systemd_version)"
+  if [[ -z "$version" || "$version" -lt 256 ]]; then
+    die "systemd >= 256 is required; found ${version:-none}"
+  fi
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    die "provisioning is interactive; run 'setup provision' in a terminal"
+  fi
+
+  local tmp config plaintext staged
+  tmp="$(mktemp -d)"
+  config="${tmp}/config"
+  plaintext=""
+  mkdir -p "$config"
+  cleanup_provision() {
+    if [[ -n "$plaintext" && -f "$plaintext" ]]; then shred -u "$plaintext" 2>/dev/null || true; fi
+    rm -rf "$tmp"
+  }
+  trap cleanup_provision EXIT
+
+  warn "Omarchy's keyring is passwordless and plaintext at rest; this plugin"
+  warn "stores your Filen credential as a systemd-encrypted blob instead."
+  say "Sign in to Filen (email/password/2FA). A temporary auth config is written"
+  say "to a private directory and shredded immediately after encryption."
+  ( cd "$tmp" && "$FILEN_BIN" --skip-update --config-dir "$config" export-auth-config )
+
+  plaintext="${config}/filen-cli-auth-config.txt"
+  [[ -f "$plaintext" ]] || plaintext="${tmp}/filen-cli-auth-config.txt"
+  [[ -f "$plaintext" ]] || die "export-auth-config did not produce a plaintext auth config"
+
+  mkdir -p "$CRED_DIR"
+  chmod 0700 "$CRED_DIR" 2>/dev/null || true
+  staged="$(mktemp "${CRED_DIR}/.filen-auth.XXXXXX")"
+  # Encrypt into a staged file, then atomically replace any existing credential,
+  # so re-running during rotation never leaves a partial blob behind.
+  systemd-creds encrypt --user --name=filen-auth "$plaintext" "$staged"
+  chmod 0600 "$staged"
+  mv -f "$staged" "$CREDENTIAL"
+  shred -u "$plaintext" 2>/dev/null || rm -f "$plaintext"
+  plaintext=""
+  trap - EXIT
+  rm -rf "$tmp"
+  say "Stored the encrypted credential at ${CREDENTIAL}."
+
+  if have systemctl; then
+    if ! systemctl --user enable --now "$MOUNT_UNIT"; then
+      warn "could not enable ${MOUNT_UNIT}; start it from the panel or run"
+      warn "  systemctl --user enable --now ${MOUNT_UNIT}"
+      exit 1
+    fi
+    say "Enabled and started ${MOUNT_UNIT}: mounted now and at login."
+    # Confirm the mount actually came up before declaring success. Capture the
+    # result and fail explicitly, rather than relying on `set -e` to exit when
+    # the smoke check happens to be the function's last command.
+    load_settings
+    if ! wait_for_mount "$MOUNT_ROOT" 30; then
+      die "the mount at ${MOUNT_ROOT} did not come up; see the hints above"
+    fi
+  else
+    warn "systemctl not found; ${MOUNT_UNIT} was not enabled"
+  fi
+}
+
+cmd_uninstall() {
+  local purge="${1:-}" unit file mount_root
+  # Capture the mount folder before the settings file is removed.
+  load_settings
+  mount_root="$MOUNT_ROOT"
+
+  precheck_units
+  for unit in "$STATUS_TIMER" "$STATUS_UNIT" "$MOUNT_UNIT"; do
+    file="${UNIT_DIR}/${unit}"
+    [[ -e "$file" || -L "$file" ]] || continue
+    unit_file_is_managed "$file" ||
+      die "refusing to remove a unit not owned by ${PLUGIN_ID}: $file"
+    if have systemctl; then systemctl --user disable --now "$unit" >/dev/null 2>&1 || true; fi
+    rm -f "$file"
+    say "Removed $file"
+  done
+  daemon_reload
+
+  # Detach a stale FUSE mount left by a crash, then clear the runtime dir. Point
+  # at the real mount the user configured, not a default.
+  # Always lazily detach: a stopped/crashed mount can leave the FUSE transport
+  # dead while the kernel still holds the mount, which `mountpoint -q` cannot
+  # reliably report (it stats, which fails). A no-op when nothing is mounted.
+  if [[ -n "$mount_root" ]]; then
+    if have fusermount3; then fusermount3 -uz "$mount_root" 2>/dev/null || true; fi
+  fi
+  rm -rf "${XDG_RUNTIME_DIR}/filen" 2>/dev/null || true
+
+  # Plugin-owned data: the managed filen binary, the pre-seeded rclone, the
+  # version marker — all namespaced under omarchy-filen/, so nothing else uses
+  # them. We never install a system rclone, so no package is touched.
+  if [[ -d "$DATA_DIR" ]]; then
+    rm -rf "$DATA_DIR"
+    say "Removed plugin data $DATA_DIR (filen binary, pre-seeded rclone)."
+  fi
+
+  # Plugin-owned settings.
+  if [[ -d "${XDG_CONFIG_HOME}/omarchy-filen" ]]; then
+    rm -rf "${XDG_CONFIG_HOME}/omarchy-filen"
+    say "Removed plugin settings ${XDG_CONFIG_HOME}/omarchy-filen."
+  fi
+
+  # Remove the mount folder only when it is present and empty; never delete files.
+  if [[ -n "$mount_root" && -d "$mount_root" ]]; then
+    if rmdir "$mount_root" 2>/dev/null; then
+      say "Removed empty mount folder $mount_root."
+    else
+      say "Kept $mount_root (not empty)."
+    fi
+  fi
+
+  if [[ "$purge" == "--purge" || "$purge" == "purge" ]]; then
+    if [[ -e "$CREDENTIAL" ]]; then
+      rm -f "$CREDENTIAL"
+      say "Removed credential $CREDENTIAL"
+    else
+      say "No stored credential to remove."
+    fi
+  else
+    say "Kept the stored credential ($CREDENTIAL). Use --purge to remove it."
+  fi
+
+  say "Left untouched: any system rclone (this plugin never installs one),"
+  say "the Filen CLI's own config, and anything stored in Filen."
+  say "To remove the plugin checkout itself: omarchy plugin remove ${PLUGIN_ID}"
+}
+
+# Credentialed producer invoked by filen-status.service. Builds the non-secret
+# API fragment from `stat /`, `list-recents` and one `stat` per recent file.
+# Always writes valid JSON and exits 0 once it has written (or tried to).
+cmd_export_fragment() {
+  local filen="$FILEN_BIN" config_dir="" auth="" out="" recents="$RECENTS"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --filen)            filen="${2:?}"; shift 2 ;;
+      --config-dir)       config_dir="${2:?}"; shift 2 ;;
+      --auth-config-path) auth="${2:?}"; shift 2 ;;
+      --out)              out="${2:?}"; shift 2 ;;
+      --recents)          recents="${2:?}"; shift 2 ;;
+      *) die "export-fragment: unknown argument: $1" ;;
+    esac
+  done
+  [[ -n "$config_dir" ]] || config_dir="${XDG_RUNTIME_DIR}/filen"
+  [[ -n "$out" ]] || out="${config_dir}/api-status.json"
+  [[ -x "$filen" ]] || die "export-fragment: filen binary not found: $filen"
+  have python3 || die "export-fragment: python3 is required"
+
+  FRAG_FILEN="$filen" \
+  FRAG_CONFIG="$config_dir" \
+  FRAG_AUTH="$auth" \
+  FRAG_OUT="$out" \
+  FRAG_RECENTS="$recents" \
+  python3 - <<'PY'
+import json, os, subprocess, time
+from datetime import datetime, timezone
+
+
+def tail(text):
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def to_epoch(value):
+    if value is None or isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip()
+    if not text or text.lower() == "null":
+        return 0
+    try:
+        return int(float(text))
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def run(args):
+    proc = subprocess.run(args, capture_output=True, text=True)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+# A credential that is rejected produces a distinctive stderr; anything else
+# (offline, DNS, timeout) is a transport failure and must not be reported as an
+# authentication problem. Match only specific phrases: a bare "auth" substring
+# would also catch network errors (e.g. an OAuth endpoint timeout).
+AUTH_HINTS = (
+    "email or password wrong",
+    "password wrong",
+    "wrong password",
+    "2fa",
+    "two-factor",
+    "two factor",
+    "unauthorized",
+    "authentication failed",
+    "invalid credentials",
+)
+
+
+def looks_like_auth_error(text):
+    low = (text or "").lower()
+    return any(hint in low for hint in AUTH_HINTS)
+
+
+def read_prior(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+filen = os.environ["FRAG_FILEN"]
+config_dir = os.environ["FRAG_CONFIG"]
+auth = os.environ.get("FRAG_AUTH", "")
+out = os.environ["FRAG_OUT"]
+try:
+    limit = max(0, int(os.environ.get("FRAG_RECENTS", "15")))
+except ValueError:
+    limit = 15
+
+base = [filen, "--skip-update", "--json", "--config-dir", config_dir]
+if auth:
+    base += ["--auth-config-path", auth]
+
+# H08: when the probe fails, carry the previous fragment's cached quota and its
+# ``checkedAt`` forward so the panel shows last-known data as stale rather than
+# blanking. Only a first-ever run stamps the current time.
+prior = read_prior(out)
+fragment = {"ok": False, "checkedAt": int(time.time()), "files": []}
+if prior is not None:
+    for key in ("usedBytes", "quotaBytes", "quotaKnown", "usagePercent", "files"):
+        if key in prior:
+            fragment[key] = prior[key]
+    prior_checked = prior.get("checkedAt")
+    if (
+        isinstance(prior_checked, (int, float))
+        and not isinstance(prior_checked, bool)
+        and prior_checked > 0
+    ):
+        fragment["checkedAt"] = int(prior_checked)
+try:
+    code, stdout, stderr = run(base + ["stat", "/"])
+    if code != 0:
+        if looks_like_auth_error(stderr):
+            # A rejected credential is a definitive answer, not a transport
+            # failure: stamp it fresh so the panel flips to needs-auth (H07).
+            fragment["authenticated"] = False
+            fragment["checkedAt"] = int(time.time())
+        raise RuntimeError(tail(stderr) or "stat / failed")
+    drive = json.loads(stdout)
+    used = int(drive.get("usedStorage") or 0)
+    quota = int(drive.get("totalStorage") or 0)
+    fragment["ok"] = True
+    fragment["authenticated"] = True
+    fragment["usedBytes"] = used
+    fragment["quotaBytes"] = quota
+    fragment["quotaKnown"] = quota > 0
+    fragment["usagePercent"] = (
+        round(min(max(used / quota * 100.0, 0.0), 100.0), 2) if quota else 0.0
+    )
+
+    # A successful probe starts a fresh recents list; do not leak the carried
+    # prior list if list-recents fails below.
+    fragment["files"] = []
+    code, stdout, _ = run(base + ["list-recents"])
+    if code == 0:
+        try:
+            recents = json.loads(stdout)
+        except ValueError:
+            recents = {}
+        paths = [p for p in recents.get("files", []) if isinstance(p, str)][:limit]
+        files = []
+        for path in paths:
+            item_code, item_out, _ = run(base + ["stat", path])
+            if item_code != 0:
+                continue
+            try:
+                item = json.loads(item_out)
+            except ValueError:
+                continue
+            files.append({
+                "name": item.get("name") or os.path.basename(path.rstrip("/")),
+                "path": path,
+                "folder": os.path.dirname(path) or "/",
+                "modifiedTs": to_epoch(item.get("modified")),
+                "sizeBytes": int(item.get("size") or 0),
+            })
+        fragment["files"] = files
+except Exception as exc:
+    fragment["ok"] = False
+    fragment["error"] = str(exc)[:200]
+
+os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+tmp = "{}.tmp.{}".format(out, os.getpid())
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(fragment, handle, separators=(",", ":"))
+os.chmod(tmp, 0o600)
+os.replace(tmp, out)
+PY
+}
+
+# --------------------------------------------------------------- dispatch
+
+main() {
+  local command="${1:-install}"
+  shift || true
+  case "$command" in
+    install|"")        cmd_install "$@" ;;
+    update|repair)     cmd_install "$@" ;;
+    settings)          cmd_settings "$@" ;;
+    mount-run)         cmd_mount_run "$@" ;;
+    cleanup)           cmd_cleanup ;;
+    provision)         cmd_provision "$@" ;;
+    uninstall|--uninstall) cmd_uninstall "${1:-}" ;;
+    check)             cmd_check ;;
+    doctor)            cmd_doctor ;;
+    export-fragment)   cmd_export_fragment "$@" ;;
+    refresh-timer)     cmd_refresh_timer ;;
+    render-unit)       render_unit "${1:-}" ;;
+    asset-name)        asset_name "${1:-}" "${2:-}" ;;
+    rclone-target)     rclone_target "${1:-}" ;;
+    check-marker)      unit_file_is_managed "${1:-}" ;;
+    wait-mount)        wait_for_mount "${1:-}" "${2:-30}" ;;
+    help|-h|--help)    usage ;;
+    *) die "unknown command: $command (try 'setup help')" ;;
+  esac
+}
+
+main "$@"

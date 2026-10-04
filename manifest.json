@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "id": "filen.storage",
+  "name": "Filen",
+  "version": "0.1.0",
+  "author": "CatalinGB",
+  "license": "MIT",
+  "description": "Filen end-to-end-encrypted cloud storage in the Omarchy bar: mount status, storage usage, and recent files, backed by a systemd-supervised FUSE mount.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Filen",
+    "description": "See the Filen mount status, storage usage, and recent files, and mount or unmount on demand.",
+    "category": "Files",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "mountRoot": "~/Filen",
+      "cacheMaxSizeGB": 4,
+      "refreshIntervalSec": 15,
+      "apiRefreshMin": 10,
+      "showLabel": false
+    },
+    "schema": [
+      {
+        "key": "mountRoot",
+        "type": "string",
+        "label": "Mount folder",
+        "defaultValue": "~/Filen",
+        "description": "Where the Filen drive appears. Changing this after setup requires the mount to be restarted."
+      },
+      {
+        "key": "cacheMaxSizeGB",
+        "type": "integer",
+        "label": "Cache size limit (GB)",
+        "min": 1,
+        "max": 512,
+        "step": 1,
+        "defaultValue": 4,
+        "description": "Upper bound on the RAM-backed VFS cache. Least recently used files are evicted first."
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Status refresh (seconds)",
+        "min": 5,
+        "max": 300,
+        "step": 5,
+        "defaultValue": 15,
+        "description": "How often mount status is checked. This reads local system state only, so it is cheap."
+      },
+      {
+        "key": "apiRefreshMin",
+        "type": "integer",
+        "label": "Storage/recents refresh (minutes)",
+        "min": 5,
+        "max": 240,
+        "step": 5,
+        "defaultValue": 10,
+        "description": "How often storage usage and recent files are fetched. This talks to Filen over the network, so keep it slow."
+      },
+      {
+        "key": "showLabel",
+        "type": "boolean",
+        "label": "Show text in bar",
+        "defaultValue": false,
+        "description": "Print the mount state next to the bar icon."
+      }
+    ]
+  }
+}
