@@ -65,8 +65,11 @@ Usage: setup [COMMAND]
 
   (no command) / install    Install filen, pre-seed rclone, write units.
   update | repair           Re-download the pinned filen and regenerate units.
-  settings [KEY=VALUE ...]  Read/modify mount settings; keys are MOUNT_ROOT and
-                            CACHE_SIZE (an rclone size such as 4G).
+  settings [KEY=VALUE ...]  Read/modify settings; keys are MOUNT_ROOT, CACHE_SIZE
+                            (an rclone size such as 4G) and API_REFRESH_MIN
+                            (positive integer minutes between status refreshes).
+  refresh-timer             Re-render filen-status.timer from API_REFRESH_MIN and
+                            apply the new cadence (used by the panel).
   mount-run --config-dir D --auth-config-path P
                             Internal: source settings, then exec the mount.
   provision                 Sign in and store the encrypted credential.
@@ -200,7 +203,6 @@ ExecStartPre=/usr/bin/mkdir -p %t/filen
 ExecStart=$setup_q mount-run --config-dir %t/filen --auth-config-path %d/filen-auth
 Restart=on-failure
 RestartSec=5
-TimeoutStartSec=60
 KillMode=mixed
 # filen's graceful shutdown handler is SIGINT-only, so send SIGINT to unmount
 # cleanly; the post-stop hook detaches a stale FUSE mount if it did not.
@@ -234,6 +236,7 @@ EOF
 }
 
 render_status_timer() {
+  load_settings
   cat <<EOF
 $MANAGED_MARKER
 [Unit]
@@ -241,7 +244,7 @@ Description=Periodically refresh the Filen status fragment
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=10min
+OnUnitActiveSec=${API_REFRESH_MIN}min
 AccuracySec=1min
 Persistent=false
 Unit=filen-status.service
@@ -359,6 +362,22 @@ enable_status_timer() {
     say "Enabled filen-status.timer."
   else
     warn "could not enable filen-status.timer"
+  fi
+  return 0
+}
+
+# Re-render the status timer after API_REFRESH_MIN changes and apply the new
+# cadence. Safe to run any time; the mount unit is never touched.
+cmd_refresh_timer() {
+  load_settings
+  write_unit "filen-status.timer" "$(render_status_timer)"
+  daemon_reload
+  if have systemctl && systemctl --user is-active --quiet filen-status.timer; then
+    if systemctl --user restart filen-status.timer; then
+      say "Restarted filen-status.timer."
+    else
+      warn "could not restart filen-status.timer"
+    fi
   fi
   return 0
 }
@@ -568,10 +587,11 @@ PY
 # --------------------------------------------------------------- settings
 
 # Source the settings file (if any) over env-provided defaults, then expand a
-# leading ~ in MOUNT_ROOT. Sets MOUNT_ROOT and CACHE_SIZE.
+# leading ~ in MOUNT_ROOT. Sets MOUNT_ROOT, CACHE_SIZE and API_REFRESH_MIN.
 load_settings() {
   MOUNT_ROOT="${OMARCHY_FILEN_MOUNT_ROOT:-$HOME/Filen}"
   CACHE_SIZE="${OMARCHY_FILEN_CACHE_SIZE:-4G}"
+  API_REFRESH_MIN="${OMARCHY_FILEN_API_REFRESH_MIN:-10}"
   if [[ -f "$SETTINGS_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$SETTINGS_FILE"
@@ -601,10 +621,15 @@ write_settings() {
     printf '%s\n' "$MANAGED_MARKER"
     printf 'MOUNT_ROOT=%s\n' "$(shell_quote "$MOUNT_ROOT")"
     printf 'CACHE_SIZE=%s\n' "$(shell_quote "$CACHE_SIZE")"
+    printf 'API_REFRESH_MIN=%s\n' "$(shell_quote "$API_REFRESH_MIN")"
   } > "$tmp"
   chmod 0600 "$tmp"
   mv "$tmp" "$SETTINGS_FILE"
   say "Wrote settings to $SETTINGS_FILE"
+}
+
+is_positive_int() {
+  [[ "$1" =~ ^[1-9][0-9]*$ ]]
 }
 
 cmd_settings() {
@@ -616,7 +641,12 @@ cmd_settings() {
     case "$key" in
       MOUNT_ROOT) MOUNT_ROOT="$value" ;;
       CACHE_SIZE) CACHE_SIZE="$value" ;;
-      *) die "settings: unknown key: ${key:-$pair} (expected MOUNT_ROOT=... or CACHE_SIZE=...)" ;;
+      API_REFRESH_MIN)
+        is_positive_int "$value" ||
+          die "settings: API_REFRESH_MIN must be a positive integer (got: ${value:-empty})"
+        API_REFRESH_MIN="$value"
+        ;;
+      *) die "settings: unknown key: ${key:-$pair} (expected MOUNT_ROOT=..., CACHE_SIZE=... or API_REFRESH_MIN=...)" ;;
     esac
   done
   write_settings
@@ -882,13 +912,33 @@ def run(args):
 
 # A credential that is rejected produces a distinctive stderr; anything else
 # (offline, DNS, timeout) is a transport failure and must not be reported as an
-# authentication problem.
-AUTH_HINTS = ("email", "password", "2fa", "two-factor", "auth", "unauthor")
+# authentication problem. Match only specific phrases: a bare "auth" substring
+# would also catch network errors (e.g. an OAuth endpoint timeout).
+AUTH_HINTS = (
+    "email or password wrong",
+    "password wrong",
+    "wrong password",
+    "2fa",
+    "two-factor",
+    "two factor",
+    "unauthorized",
+    "authentication failed",
+    "invalid credentials",
+)
 
 
 def looks_like_auth_error(text):
     low = (text or "").lower()
     return any(hint in low for hint in AUTH_HINTS)
+
+
+def read_prior(path):
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 filen = os.environ["FRAG_FILEN"]
@@ -904,12 +954,30 @@ base = [filen, "--skip-update", "--json", "--config-dir", config_dir]
 if auth:
     base += ["--auth-config-path", auth]
 
+# H08: when the probe fails, carry the previous fragment's cached quota and its
+# ``checkedAt`` forward so the panel shows last-known data as stale rather than
+# blanking. Only a first-ever run stamps the current time.
+prior = read_prior(out)
 fragment = {"ok": False, "checkedAt": int(time.time()), "files": []}
+if prior is not None:
+    for key in ("usedBytes", "quotaBytes", "quotaKnown", "usagePercent", "files"):
+        if key in prior:
+            fragment[key] = prior[key]
+    prior_checked = prior.get("checkedAt")
+    if (
+        isinstance(prior_checked, (int, float))
+        and not isinstance(prior_checked, bool)
+        and prior_checked > 0
+    ):
+        fragment["checkedAt"] = int(prior_checked)
 try:
     code, stdout, stderr = run(base + ["stat", "/"])
     if code != 0:
         if looks_like_auth_error(stderr):
+            # A rejected credential is a definitive answer, not a transport
+            # failure: stamp it fresh so the panel flips to needs-auth (H07).
             fragment["authenticated"] = False
+            fragment["checkedAt"] = int(time.time())
         raise RuntimeError(tail(stderr) or "stat / failed")
     drive = json.loads(stdout)
     used = int(drive.get("usedStorage") or 0)
@@ -923,6 +991,9 @@ try:
         round(min(max(used / quota * 100.0, 0.0), 100.0), 2) if quota else 0.0
     )
 
+    # A successful probe starts a fresh recents list; do not leak the carried
+    # prior list if list-recents fails below.
+    fragment["files"] = []
     code, stdout, _ = run(base + ["list-recents"])
     if code == 0:
         try:
@@ -976,6 +1047,7 @@ main() {
     check)             cmd_check ;;
     doctor)            cmd_doctor ;;
     export-fragment)   cmd_export_fragment "$@" ;;
+    refresh-timer)     cmd_refresh_timer ;;
     render-unit)       render_unit "${1:-}" ;;
     asset-name)        asset_name "${1:-}" "${2:-}" ;;
     rclone-target)     rclone_target "${1:-}" ;;

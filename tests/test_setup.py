@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -288,7 +289,9 @@ class SetupTest(unittest.TestCase):
         unit = self.h.run("render-unit", "filen-mount").stdout
         self.assertIn("StartLimitIntervalSec=60", unit)
         self.assertIn("StartLimitBurst=5", unit)
-        self.assertIn("TimeoutStartSec=60", unit)
+        # TimeoutStartSec is inert under Type=simple; the StartLimit bound is
+        # the real protection, so the unit must not imply a readiness bound.
+        self.assertNotIn("TimeoutStartSec", unit)
 
     def test_status_unit_render(self):
         unit = self.h.run("render-unit", "filen-status.service").stdout
@@ -309,6 +312,14 @@ class SetupTest(unittest.TestCase):
         self.assertIn("OnUnitActiveSec=10min", unit)
         self.assertIn("Unit=filen-status.service", unit)
         self.assertIn("WantedBy=timers.target", unit)
+
+    def test_status_timer_render_uses_api_refresh_min(self):
+        self.h.run("settings", "API_REFRESH_MIN=30")
+
+        unit = self.h.run("render-unit", "filen-status.timer").stdout
+
+        self.assertIn("OnUnitActiveSec=30min", unit)
+        self.assertNotIn("OnUnitActiveSec=10min", unit)
 
     def test_unknown_unit_is_rejected(self):
         self.assertNotEqual(self.h.run("render-unit", "definitely-not-a-unit").returncode, 0)
@@ -365,11 +376,39 @@ class SetupTest(unittest.TestCase):
         text = self.h.settings_file.read_text(encoding="utf-8")
         self.assertIn(f'MOUNT_ROOT="{self.h.home / "Filen"}"', text)
         self.assertIn('CACHE_SIZE="4G"', text)
+        self.assertIn('API_REFRESH_MIN="10"', text)
+
+    def test_settings_accepts_api_refresh_min(self):
+        result = self.h.run("settings", "API_REFRESH_MIN=30")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = self.h.settings_file.read_text(encoding="utf-8")
+        self.assertIn('API_REFRESH_MIN="30"', text)
+
+    def test_settings_rejects_non_positive_api_refresh_min(self):
+        for bad in ("0", "-5", "abc", ""):
+            with self.subTest(value=bad):
+                result = self.h.run("settings", f"API_REFRESH_MIN={bad}")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("API_REFRESH_MIN", result.stderr)
 
     def test_settings_rejects_unknown_key(self):
         result = self.h.run("settings", "NOPE=1")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown key", result.stderr)
+
+    def test_refresh_timer_renders_and_applies(self):
+        self.h.run("settings", "API_REFRESH_MIN=25")
+
+        result = self.h.run("refresh-timer")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        unit = (self.h.unit_dir / "filen-status.timer").read_text(encoding="utf-8")
+        self.assertIn(MARKER, unit)
+        self.assertIn("OnUnitActiveSec=25min", unit)
+        calls = "\n".join(self.h.calls())
+        self.assertIn("daemon-reload", calls)
+        self.assertIn("restart filen-status.timer", calls)
 
     def test_mount_run_argument_construction(self):
         root = self.h.tmp / "mount-root"
@@ -797,6 +836,99 @@ class SetupTest(unittest.TestCase):
         fragment = json.loads(out.read_text(encoding="utf-8"))
         self.assertIs(fragment["ok"], False)
         self.assertNotIn("authenticated", fragment)
+
+    def test_export_fragment_does_not_treat_oauth_network_error_as_auth(self):
+        # "oauth" contains the substring "auth"; a bare substring match would
+        # misclassify this transport failure as a rejected credential.
+        fake = write_exec(
+            self.h.tmp / "filen-oauth",
+            "#!/usr/bin/env bash\necho 'request to oauth endpoint failed: i/o timeout' >&2\nexit 1\n",
+        )
+        out = self.h.tmp / "api-status.json"
+
+        result = self.h.run(
+            "export-fragment",
+            "--filen",
+            str(fake),
+            "--config-dir",
+            str(self.h.tmp),
+            "--out",
+            str(out),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fragment = json.loads(out.read_text(encoding="utf-8"))
+        self.assertIs(fragment["ok"], False)
+        self.assertNotIn("authenticated", fragment)
+
+    def test_export_fragment_carries_prior_quota_when_offline(self):
+        out = self.h.tmp / "api-status.json"
+        out.write_text(
+            json.dumps(
+                {
+                    "ok": True,
+                    "authenticated": True,
+                    "usedBytes": 1500,
+                    "quotaBytes": 4000,
+                    "usagePercent": 37.5,
+                    "quotaKnown": True,
+                    "files": [
+                        {"name": "old.txt", "path": "/old.txt", "folder": "/",
+                         "modifiedTs": 1, "sizeBytes": 5}
+                    ],
+                    "checkedAt": 1700000000,
+                }
+            ),
+            encoding="utf-8",
+        )
+        fake = write_exec(
+            self.h.tmp / "filen-offline",
+            "#!/usr/bin/env bash\necho 'connection timed out' >&2\nexit 1\n",
+        )
+
+        result = self.h.run(
+            "export-fragment",
+            "--filen",
+            str(fake),
+            "--config-dir",
+            str(self.h.tmp),
+            "--out",
+            str(out),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fragment = json.loads(out.read_text(encoding="utf-8"))
+        self.assertIs(fragment["ok"], False)
+        self.assertIn("error", fragment)
+        self.assertEqual(fragment["usedBytes"], 1500)
+        self.assertEqual(fragment["quotaBytes"], 4000)
+        self.assertIs(fragment["quotaKnown"], True)
+        self.assertEqual(fragment["usagePercent"], 37.5)
+        self.assertEqual(fragment["files"][0]["name"], "old.txt")
+        self.assertEqual(fragment["checkedAt"], 1700000000)
+
+    def test_export_fragment_offline_with_no_prior_stamps_now(self):
+        out = self.h.tmp / "api-status.json"
+        fake = write_exec(
+            self.h.tmp / "filen-offline",
+            "#!/usr/bin/env bash\necho 'connection timed out' >&2\nexit 1\n",
+        )
+        before = int(time.time())
+
+        result = self.h.run(
+            "export-fragment",
+            "--filen",
+            str(fake),
+            "--config-dir",
+            str(self.h.tmp),
+            "--out",
+            str(out),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fragment = json.loads(out.read_text(encoding="utf-8"))
+        self.assertIs(fragment["ok"], False)
+        self.assertGreaterEqual(fragment["checkedAt"], before)
 
 
 if __name__ == "__main__":

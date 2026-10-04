@@ -18,6 +18,6 @@
   "personal.filen.mount": {
     "icon": "󰅠",
     "label": "Mount / unmount Filen",
-    "action": "systemctl --user restart filen-mount.service"
+    "action": "systemctl --user restart omarchy-filen-mount.service"
   }
 }

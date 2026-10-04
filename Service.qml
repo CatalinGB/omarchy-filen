@@ -50,6 +50,9 @@ Item {
   // pair is a no-op. `-1` makes the first push (Component.onCompleted) land.
   property string _pushedMountRoot: ""
   property int _pushedCacheMaxSizeGB: -1
+  // The API refresh cadence last written; a change re-renders the status timer
+  // (never the mount).
+  property int _pushedApiRefreshMin: -1
   // The first push only mirrors settings to disk; a live mount is restarted
   // solely for a change made after that, so a shell start / hot-reload never
   // drops the user's mount.
@@ -198,8 +201,16 @@ Item {
     mountSettingsTimer.restart()
   }
 
+  // Re-render and apply the status timer after the API cadence changes. This
+  // only touches filen-status.timer, never the mount.
+  function refreshTimer() {
+    if (refreshTimerProcess.running) return
+    refreshTimerProcess.command = ["bash", setupScript, "refresh-timer"]
+    refreshTimerProcess.running = true
+  }
+
   function flushMountSettings() {
-    if (mountRoot === _pushedMountRoot && cacheMaxSizeGB === _pushedCacheMaxSizeGB) return
+    if (mountRoot === _pushedMountRoot && cacheMaxSizeGB === _pushedCacheMaxSizeGB && apiRefreshMin === _pushedApiRefreshMin) return
     if (settingsProcess.running) {
       // A push is already in flight; re-check once it lands.
       mountSettingsTimer.restart()
@@ -209,8 +220,10 @@ Item {
     // is not recorded as applied.
     settingsProcess.appliedMountRoot = mountRoot
     settingsProcess.appliedCacheMaxSizeGB = cacheMaxSizeGB
+    settingsProcess.appliedApiRefreshMin = apiRefreshMin
     settingsProcess.command = ["bash", setupScript, "settings",
-      "MOUNT_ROOT=" + mountRoot, "CACHE_SIZE=" + cacheMaxSizeGB + "G"]
+      "MOUNT_ROOT=" + mountRoot, "CACHE_SIZE=" + cacheMaxSizeGB + "G",
+      "API_REFRESH_MIN=" + apiRefreshMin]
     settingsProcess.running = true
   }
 
@@ -319,6 +332,7 @@ Item {
     // What this run writes; recorded as applied only once it exits cleanly.
     property string appliedMountRoot: ""
     property int appliedCacheMaxSizeGB: 0
+    property int appliedApiRefreshMin: 0
     running: false
     command: []
     stdout: StdioCollector { id: settingsOut; waitForEnd: true }
@@ -330,19 +344,41 @@ Item {
         return
       }
       var first = !root._settingsInitialized
+      var mountChanged = appliedMountRoot !== root._pushedMountRoot || appliedCacheMaxSizeGB !== root._pushedCacheMaxSizeGB
+      var apiChanged = appliedApiRefreshMin !== root._pushedApiRefreshMin
       root._pushedMountRoot = appliedMountRoot
       root._pushedCacheMaxSizeGB = appliedCacheMaxSizeGB
+      root._pushedApiRefreshMin = appliedApiRefreshMin
       root._settingsInitialized = true
       // The unit read the old flags at start, so a live mount needs a restart —
       // but only for a change made after the initial mirror; a shell start must
       // not restart an existing mount. A stopped unit picks flags up on start.
-      if (!first && root.running) root.restart()
+      if (!first && mountChanged && root.running) root.restart()
+      // The API cadence is owned by the status timer, not the mount: re-render
+      // the timer so the new interval takes effect. Same first-push rule so a
+      // shell start does not churn the timer.
+      if (!first && apiChanged) root.refreshTimer()
+    }
+  }
+
+  Process {
+    id: refreshTimerProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: refreshTimerOut; waitForEnd: true }
+    stderr: StdioCollector { id: refreshTimerErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) {
+        var reason = String(refreshTimerErr.text || refreshTimerOut.text || "").trim()
+        root.lastError = ("Could not update the status refresh cadence" + (reason ? ": " + reason : "")).substring(0, 200)
+      }
     }
   }
 
   // A settings edit re-runs the debounced push; skip if the pair is unchanged.
   onMountRootChanged: pushMountSettings()
   onCacheMaxSizeGBChanged: pushMountSettings()
+  onApiRefreshMinChanged: pushMountSettings()
 
   // Nothing destructive: the startup poll is timer-driven (`triggeredOnStart`).
   // This service never authenticates, never reads the credential, and never

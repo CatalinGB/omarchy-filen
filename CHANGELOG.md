@@ -37,9 +37,8 @@ and this project adheres to
 
 ### Fixed
 
-- Bound mount restarts with `StartLimitIntervalSec`/`StartLimitBurst` and a
-  network-appropriate `TimeoutStartSec`, so a failing mount lands in `failed`
-  instead of storming the user manager.
+- Bound mount restarts with `StartLimitIntervalSec`/`StartLimitBurst`, so a
+  failing mount lands in `failed` instead of storming the user manager.
 - The status helper distinguishes a rejected credential (`needs-auth`) from
   offline (`quotaKnown:false`, stale `checkedAt`) and always emits one valid JSON
   object on malformed input.

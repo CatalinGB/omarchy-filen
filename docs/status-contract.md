@@ -91,7 +91,7 @@ Failure document (the service always writes valid JSON):
 |---|---|---|
 | `ok` | service | `false` ⇒ panel shows `error`; other fields may be absent |
 | `installed` | ticket 10 | the plugin-managed `filen` binary is present |
-| `authenticated` | credential blob presence | blob present (setup done). A revoked-but-present credential surfaces as `unitState=failed` / `quotaKnown=false`; **never** a prompt |
+| `authenticated` | credential blob + fresh fragment (H07) | `blob present AND NOT (fresh fragment with authenticated:false)`. A rejected credential yields `needs-auth`; a stale/absent fragment or a network error keeps it `true`. **never** a prompt |
 | `running` | ticket 01 | `mountpoint -q "$mountPath"` and/or unit `ActiveState` |
 | `statusText` | service | human string (e.g. `Mounted`, `Sign-in needed`, `Stopped`) |
 | `mountPath` | settings | the local mount root (`~/Filen` default) |
