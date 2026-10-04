@@ -15,6 +15,7 @@ function defaultStatus() {
     mountPath: "",
     unitState: "",
     autoMount: false,
+    // Kept for parity with the dropbox contract; no plan data is ever emitted.
     plan: null,
     usedBytes: 0,
     quotaBytes: 0,
@@ -114,27 +115,19 @@ function stateGlyph(state) {
 }
 
 // Single-account status document (see .scratch/omarchy-filen/status-contract.md)
-// mapped to one worst-first state string. The panel branches its action on the
-// raw installed/authenticated flags; the bar shows the state.
+// mapped to one worst-first state string. Not-installed is its own state, not a
+// signed-out one: the panel offers Install (not Set up) and the bar shows no
+// auth alert. The panel branches its action on the raw installed/authenticated
+// flags; the bar shows the state.
 function stateFor(status) {
   if (!status || status.ok === false) return "failed"
-  if (status.installed === false) return "needs-auth"
+  if (status.installed === false) return "not-installed"
   if (status.authenticated === false) return "needs-auth"
   var unit = String(status.unitState || "")
   if (unit === "activating" || unit === "reloading") return "mounting"
   if (unit === "failed") return "failed"
   if (status.running === true) return "mounted"
   return "stopped"
-}
-
-// Not-installed is its own state, not a signed-out one: the panel must offer
-// Install (not Set up) and the bar must not show an auth alert. `stateFor` keeps
-// the tested credential-flag mapping; this derives the display state on top.
-function displayState(status) {
-  var s = status || {}
-  if (s.ok === false) return "failed"
-  if (s.installed === false) return "not-installed"
-  return stateFor(s)
 }
 
 // The one action each condition wants, derived from the status contract rather
@@ -238,7 +231,6 @@ if (typeof module !== "undefined") {
     stateLabel: stateLabel,
     stateGlyph: stateGlyph,
     stateFor: stateFor,
-    displayState: displayState,
     noActions: noActions,
     panelActions: panelActions,
     fileUri: fileUri,

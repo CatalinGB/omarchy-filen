@@ -23,9 +23,6 @@ jobs:
       - name: Python unit tests
         run: python3 -m unittest discover -s tests
 
-      - name: Python integration tests (hermetic)
-        run: python3 -m unittest discover -s tests/integration
-
       - name: Model tests
         run: node tests/model.test.js
 

@@ -367,6 +367,8 @@ def build_status(
         "mountPath": str(mount_root),
         "unitState": state,
         "autoMount": bool(auto_mount),
+        # Kept for parity with the dropbox contract; the filen CLI exposes no
+        # plan data, so this is intentionally always null.
         "plan": None,
         "usedBytes": api["usedBytes"],
         "quotaBytes": api["quotaBytes"],

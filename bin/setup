@@ -776,9 +776,13 @@ cmd_provision() {
       exit 1
     fi
     say "Enabled and started omarchy-filen-mount.service: mounted now and at login."
-    # Confirm the mount actually came up before declaring success.
+    # Confirm the mount actually came up before declaring success. Capture the
+    # result and fail explicitly, rather than relying on `set -e` to exit when
+    # the smoke check happens to be the function's last command.
     load_settings
-    wait_for_mount "$MOUNT_ROOT" 30
+    if ! wait_for_mount "$MOUNT_ROOT" 30; then
+      die "the mount at ${MOUNT_ROOT} did not come up; see the hints above"
+    fi
   else
     warn "systemctl not found; omarchy-filen-mount.service was not enabled"
   fi

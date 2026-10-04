@@ -58,13 +58,13 @@ Item {
   // drops the user's mount.
   property bool _settingsInitialized: false
 
-  // `displayState` folds not-installed into its own state (so the bar/panel do
-  // not read an uninstalled plugin as "sign-in needed"); `stateFor`'s
-  // credential-flag mapping is unchanged underneath. The optimistic override
-  // still wins so a control click reflects immediately (H04).
+  // `stateFor` folds not-installed into its own state (so the bar/panel do not
+  // read an uninstalled plugin as "sign-in needed") ahead of the credential
+  // flags. The optimistic override still wins so a control click reflects
+  // immediately (H04).
   readonly property string state: _pendingState !== ""
     ? _pendingState
-    : Model.displayState({ ok: ok, installed: installed, authenticated: authenticated, unitState: unitState, running: running })
+    : Model.stateFor({ ok: ok, installed: installed, authenticated: authenticated, unitState: unitState, running: running })
   readonly property bool busy: statusProcess.running || controlProcess.running
 
   // ---------------------------------------------------------------- settings
@@ -86,9 +86,10 @@ Item {
   readonly property int apiRefreshMin: intSetting("apiRefreshMin", 10, 5, 240)
   readonly property bool showLabel: setting("showLabel", false) === true
 
-  // The API fragment ages out at twice the refresh cadence, matching the status
-  // helper's API_MAX_AGE_SECONDS. Keeping the rule here lets the panel read one
-  // value instead of re-deriving it.
+  // The API fragment ages out at twice the refresh cadence. This is the single
+  // source for that number: `refresh()` passes it to the status helper as
+  // `--api-max-age`, and the panel reads it as `staleAfterSec`, so the helper's
+  // freshness gate and the panel's staleness gate are intentionally equal.
   readonly property int staleAfterSec: apiRefreshMin * 120
 
   // ---------------------------------------------------------------- paths
@@ -109,7 +110,11 @@ Item {
   function refresh() {
     if (statusProcess.running) return
     refreshing = true
-    statusProcess.command = ["python3", statusScript, "--mount-root", mountRoot]
+    // `--api-max-age` carries the panel's own staleness threshold so the
+    // helper's freshness gate and the panel's gate stay equal (see
+    // `staleAfterSec`).
+    statusProcess.command = ["python3", statusScript, "--mount-root", mountRoot,
+      "--api-max-age", String(staleAfterSec)]
     statusProcess.running = true
   }
 

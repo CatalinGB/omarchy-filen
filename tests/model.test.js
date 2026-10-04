@@ -58,8 +58,10 @@ assertEqual(
 )
 assertEqual(
   Model.stateFor({ ok: true, installed: false }),
-  "needs-auth", "stateFor not installed"
+  "not-installed", "stateFor not installed"
 )
+assertEqual(Model.stateLabel("not-installed"), "Not installed", "stateLabel not installed")
+assertEqual(Model.stateGlyph("not-installed"), Model.GLYPH_STOPPED, "stateGlyph not installed")
 assertEqual(Model.stateFor({ ok: false }), "failed", "stateFor failure doc")
 assertEqual(
   Model.stateFor({ ok: true, installed: true, authenticated: true, running: false }),

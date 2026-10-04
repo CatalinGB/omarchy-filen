@@ -732,8 +732,12 @@ class SetupTest(unittest.TestCase):
         rc, out = self.h.run_tty("provision")
 
         self.assertNotEqual(rc, 0)
+        # The smoke check's own actionable hint ...
         self.assertIn("did not come up", out)
         self.assertIn("journalctl --user -u omarchy-filen-mount.service", out)
+        # ... and the explicit failure from provision, so the exit is not
+        # incidental to `set -e`.
+        self.assertIn("setup: error:", out)
 
     # -------------------------------------------------------- fragment producer
 
