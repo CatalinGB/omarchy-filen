@@ -657,7 +657,10 @@ cmd_uninstall() {
 
   # Detach a stale FUSE mount left by a crash, then clear the runtime dir. Point
   # at the real mount the user configured, not a default.
-  if [[ -n "$mount_root" ]] && mountpoint -q "$mount_root" 2>/dev/null; then
+  # Always lazily detach: a stopped/crashed mount can leave the FUSE transport
+  # dead while the kernel still holds the mount, which `mountpoint -q` cannot
+  # reliably report (it stats, which fails). A no-op when nothing is mounted.
+  if [[ -n "$mount_root" ]]; then
     have fusermount3 && fusermount3 -uz "$mount_root" 2>/dev/null || true
   fi
   rm -rf "${XDG_RUNTIME_DIR}/filen" 2>/dev/null || true
