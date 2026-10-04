@@ -1,0 +1,2 @@
+# Development / CI tooling. Runtime needs only python3's standard library.
+coverage

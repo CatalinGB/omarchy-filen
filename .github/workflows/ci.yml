@@ -20,8 +20,13 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Python unit tests
-        run: python3 -m unittest discover -s tests
+      - name: Install dev tools
+        run: python3 -m pip install --upgrade pip -r requirements-dev.txt
+
+      - name: Python unit tests + coverage
+        run: |
+          python3 -m coverage run -m unittest discover -s tests
+          python3 -m coverage report
 
       - name: Model tests
         run: node tests/model.test.js

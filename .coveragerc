@@ -1,0 +1,12 @@
+# Coverage for the plugin's Python. `bin/setup` is bash and the QML/JS layer
+# is not Python, so the measurable product surface is `bin/status` (the status
+# helper). Its functions are imported and exercised in-process by
+# tests/test_status.py.
+[run]
+source = bin
+
+[report]
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:

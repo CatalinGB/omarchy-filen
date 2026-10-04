@@ -1,0 +1,111 @@
+name: Upstream release check
+
+on:
+  schedule:
+    # Weekly, Mondays at 06:17 UTC (avoid the top-of-hour rush).
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-pins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Compare pins against upstream releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # --- Parse the pins out of bin/setup ---------------------------
+          pin() {
+            local name="$1" file="$2"
+            sed -n "s/^${name}=\"\(.*\)\"\$/\1/p" "$file" | head -n1
+          }
+
+          FILEN_VERSION="$(pin FILEN_VERSION bin/setup)"
+          FILEN_RELEASES_REPO="$(pin FILEN_RELEASES_REPO bin/setup)"
+          RCLONE_VERSION="$(pin RCLONE_VERSION bin/setup)"
+
+          if [ -z "$FILEN_VERSION" ] || [ -z "$FILEN_RELEASES_REPO" ] || [ -z "$RCLONE_VERSION" ]; then
+            echo "::error::failed to parse one or more pins from bin/setup"
+            exit 1
+          fi
+          echo "pins: filen=${FILEN_VERSION} repo=${FILEN_RELEASES_REPO} rclone=${RCLONE_VERSION}"
+
+          # --- Resolve the newest upstream tag ---------------------------
+          # filen-rs ships pre-release tags, so /releases/latest does not
+          # apply: list releases and take the newest by publication date.
+          # Returns an empty string (never fails the step) when unresolvable.
+          latest_tag() {
+            local repo="$1"
+            gh api "repos/${repo}/releases?per_page=100" \
+              --jq '[.[] | select(.draft == false)] | sort_by(.published_at) | last | .tag_name // empty' \
+              2>/dev/null || true
+          }
+
+          FILEN_LATEST="$(latest_tag "$FILEN_RELEASES_REPO" | sed 's/^v//')"
+          RCLONE_LATEST="$(latest_tag "rclone/rclone" | sed 's/^v//')"
+          echo "latest: filen=${FILEN_LATEST:-<unresolved>} rclone=${RCLONE_LATEST:-<unresolved>}"
+
+          # --- Decide whether a pin is behind ----------------------------
+          # Uses version-sort so 0.2.10 > 0.2.9. An unresolved latest tag is
+          # treated as "not behind" to avoid false alarms.
+          is_behind() {
+            local pin="$1" latest="$2"
+            [ -n "$latest" ] || return 1
+            [ "$pin" != "$latest" ] || return 1
+            local newest
+            newest="$(printf '%s\n%s\n' "$pin" "$latest" | sort -V | tail -n1)"
+            [ "$newest" = "$latest" ]
+          }
+
+          filen_behind=false
+          rclone_behind=false
+          if is_behind "$FILEN_VERSION" "$FILEN_LATEST"; then filen_behind=true; fi
+          if is_behind "$RCLONE_VERSION" "$RCLONE_LATEST"; then rclone_behind=true; fi
+
+          if [ "$filen_behind" = false ] && [ "$rclone_behind" = false ]; then
+            echo "All pins are current (or upstream tag unresolvable); nothing to do."
+            exit 0
+          fi
+
+          # --- Compose the issue body ------------------------------------
+          TITLE="Upstream release behind pin"
+          DOCS_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/blob/HEAD/docs/pin-maintenance.md"
+          BODY_FILE="$(mktemp)"
+          {
+            echo "One or more upstream dependencies are newer than the pins in \`bin/setup\`."
+            echo
+            echo "| Dependency | Pinned | Latest |"
+            echo "|---|---|---|"
+            if [ "$filen_behind" = true ]; then
+              echo "| \`filen\` (\`${FILEN_RELEASES_REPO}\`) | \`${FILEN_VERSION}\` | \`${FILEN_LATEST}\` |"
+            fi
+            if [ "$rclone_behind" = true ]; then
+              echo "| \`rclone\` | \`${RCLONE_VERSION}\` | \`${RCLONE_LATEST}\` |"
+            fi
+            echo
+            echo "Follow [docs/pin-maintenance.md](${DOCS_URL}) to bump the pin(s)."
+            echo
+            echo "_Opened automatically by the [upstream-check](${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/workflows/upstream-check.yml) workflow._"
+          } > "$BODY_FILE"
+
+          # --- Open or update a single issue -----------------------------
+          EXISTING="$(gh issue list --state open --limit 100 --json number,title \
+            --jq '.[] | select(.title == "Upstream release behind pin") | .number' \
+            2>/dev/null | head -n1 || true)"
+
+          if [ -n "$EXISTING" ]; then
+            echo "Found open issue #${EXISTING}; adding a comment."
+            gh issue comment "$EXISTING" --body-file "$BODY_FILE"
+          else
+            echo "No open issue; creating one."
+            gh issue create --title "$TITLE" --body-file "$BODY_FILE"
+          fi
