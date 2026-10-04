@@ -14,7 +14,9 @@ The plugin installs everything it needs: the `filen` binary, rclone, and its
 systemd units. You log in once, and it starts at login.
 
 > **Beta.** `filen-rs` is a public beta. This plugin pins a known-good `filen`
-> version and updates it deliberately.
+> version and updates it deliberately — currently **0.2.9** (a pre-release),
+> because 0.2.8 panics on mount. See
+> [docs/supported-environments.md](docs/supported-environments.md).
 
 ## Requirements
 
@@ -22,8 +24,16 @@ systemd units. You log in once, and it starts at login.
 - `systemd` 256+ (for `systemd-creds --user`)
 - `python3` and `fuse3` (both ship with Omarchy; used for the status helper and
   the mount respectively)
+- x86_64 or aarch64 (gnu or musl)
 
-The plugin detects anything missing and offers to install it.
+The plugin detects anything missing and offers to install it. The full matrix —
+plus the pinned `filen` 0.2.9 / rclone 1.74.2 versions — is in
+[docs/supported-environments.md](docs/supported-environments.md).
+
+> **Known limitations.** Filen appears as a **mount, not a sync client** (no
+> offline copy; the RAM cache is lost on reboot), it is **single-account**, and
+> the CLI exposes **no plan data**. The pinned `filen` is a pre-release. See
+> [docs/troubleshooting.md](docs/troubleshooting.md#known-limitations).
 
 ## Install
 
@@ -132,6 +142,10 @@ into `~/.config/omarchy/extensions/omarchy-menu.jsonc` to add Filen entries
 - **Filen shows unavailable** — check `systemd-creds` support (`systemd-creds
   --version`) and that FUSE is installed.
 
+The full state → cause → action matrix (needs-auth, failed, offline/stale quota,
+RAM cache, stale FUSE, credential errors) is in
+[docs/troubleshooting.md](docs/troubleshooting.md).
+
 ## Uninstall
 
 ```bash
@@ -145,10 +159,21 @@ Uninstalling never touches anything stored in Filen.
 
 ## Docs
 
+- [docs/supported-environments.md](docs/supported-environments.md) — supported
+  platforms, required tools, architectures, pinned versions, and the beta caveat.
+- [docs/troubleshooting.md](docs/troubleshooting.md) — the state → cause → action
+  matrix and known limitations.
+- [docs/verification.md](docs/verification.md) — the automated suites and the
+  live end-to-end checklist (`tests/e2e/live.sh`).
 - [docs/status-contract.md](docs/status-contract.md) — the status JSON and CLI
   invocation contract the panel consumes.
 - [docs/prerequisites.md](docs/prerequisites.md) — what the plugin installs and
   who owns it.
+- [docs/pin-maintenance.md](docs/pin-maintenance.md) — how to bump the pinned
+  `filen`/rclone versions, and what `setup doctor` reports.
+- [docs/release.md](docs/release.md) — the versioning/release runbook.
+- [docs/upstream-filen-rs-0.2.8-mount-panic.md](docs/upstream-filen-rs-0.2.8-mount-panic.md)
+  — the draft upstream issue for the 0.2.8 mount panic.
 - [SECURITY.md](SECURITY.md) — the security model.
 
 ## License

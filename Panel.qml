@@ -68,12 +68,29 @@ Panel {
   }
   readonly property real usageFraction: hasService ? Model.usageFraction(filen) : 0
 
-  // Visibility rules for the action rows, per the ticket.
-  readonly property bool mountVisible: installed && authenticated
-  readonly property bool filesVisible: installed && remoteFiles.length > 0
-  readonly property bool setupVisible: installed
-  readonly property bool installVisible: hasService && !installed
-  readonly property bool repairVisible: hasService && (filen.ok === false || unitState === "failed")
+  // Which actions the current state offers. The rule set lives in Model.js so
+  // it is one source of truth (and unit-testable); the panel only binds rows to
+  // it. See panelActions: not-installed -> Install; signed out -> Set up;
+  // stopped -> Mount; unit failed -> Repair; mounted -> Unmount + recents. A
+  // signed-out or failed unit never offers Mount (H10).
+  readonly property var actions: hasService
+    ? Model.panelActions({
+        ok: filen.ok,
+        installed: root.installed,
+        authenticated: root.authenticated,
+        running: root.running,
+        unitState: root.unitState
+      })
+    : Model.noActions()
+
+  readonly property bool mountVisible: root.actions.mount
+  readonly property bool filesVisible: root.actions.files && remoteFiles.length > 0
+  readonly property bool setupVisible: root.actions.setup
+  readonly property bool installVisible: root.actions.install
+  readonly property bool repairVisible: root.actions.repair
+  readonly property bool updateVisible: root.actions.updates
+  readonly property bool autoLoginVisible: root.actions.autoLogin
+  readonly property bool journalHintVisible: root.actions.journalHint
 
   readonly property string mountLabel: running ? "Unmount Filen" : "Mount Filen"
   readonly property string mountSubtitle: running
@@ -112,10 +129,11 @@ Panel {
     var list = []
     if (mountVisible) list.push("mount")
     if (filesVisible) list.push("files")
-    list.push("autologin")
+    if (autoLoginVisible) list.push("autologin")
     if (setupVisible) list.push("setup")
     if (installVisible) list.push("install")
     if (repairVisible) list.push("repair")
+    if (updateVisible) list.push("updates")
     return list
   }
 
@@ -185,6 +203,7 @@ Panel {
     if (focusSection === "setup") return setupRow
     if (focusSection === "install") return installRow
     if (focusSection === "repair") return repairRow
+    if (focusSection === "updates") return updateRow
     return null
   }
 
@@ -200,6 +219,7 @@ Panel {
     else if (focusSection === "setup") runSetup("provision")
     else if (focusSection === "install") runSetup("install")
     else if (focusSection === "repair") runSetup("install")
+    else if (focusSection === "updates") runSetup("update")
   }
 
   // ---------------------------------------------------------------- actions
@@ -351,6 +371,7 @@ Panel {
         if (key === "r") root.refresh()
         else if (key === "m") root.mountAction()
         else if (key === "s" && root.setupVisible) root.runSetup("provision")
+        else if (key === "u" && root.updateVisible) root.runSetup("update")
       }
 
       Flickable {
@@ -473,10 +494,11 @@ Panel {
             onHoveredIn: root.setSection("mount")
           }
 
-          PanelSeparator { foreground: root.foreground }
+          PanelSeparator { visible: root.actions.files; foreground: root.foreground }
 
           // ---- storage ----
           Column {
+            visible: root.actions.files
             width: parent.width
             spacing: Style.space(8)
 
@@ -513,11 +535,11 @@ Panel {
             }
           }
 
-          PanelSeparator { foreground: root.foreground }
+          PanelSeparator { visible: root.actions.files; foreground: root.foreground }
 
           // ---- recent files ----
           Column {
-            visible: root.installed
+            visible: root.actions.files
             width: parent.width
             spacing: Style.space(10)
 
@@ -528,7 +550,7 @@ Panel {
             }
 
             Text {
-              visible: root.installed && root.remoteFiles.length === 0
+              visible: root.actions.files && root.remoteFiles.length === 0
               width: parent.width
               text: root.storageStale ? "No recent files available." : "No recent files found."
               color: root.dim
@@ -557,12 +579,16 @@ Panel {
             }
           }
 
-          PanelSeparator { foreground: root.foreground }
+          PanelSeparator {
+            visible: root.autoLoginVisible || root.setupVisible || root.installVisible
+              || root.repairVisible || root.updateVisible
+            foreground: root.foreground
+          }
 
           // ---- controls ----
           Toggle {
             id: autoLoginRow
-            visible: root.hasService
+            visible: root.autoLoginVisible
             width: parent.width
             label: "Mount at login"
             description: "Start the Filen mount when you sign in."
@@ -610,6 +636,34 @@ Panel {
             hasCursor: root.cursorActive && root.focusSection === "repair"
             onTriggered: root.runSetup("install")
             onHoveredIn: root.setSection("repair")
+          }
+
+          // The unit failed: point at its journal so the user can see why
+          // before/after repairing (H10).
+          Text {
+            visible: root.journalHintVisible
+            width: parent.width
+            textFormat: Text.PlainText
+            text: "Unit log: journalctl --user -u omarchy-filen-mount.service"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+
+          // Explicit runtime/unit refresh (H17). Never silent: it opens a
+          // terminal running `setup update`, and the settle re-poll reports the
+          // new version afterwards.
+          ActionRow {
+            id: updateRow
+            visible: root.updateVisible
+            width: parent.width
+            glyph: "󰚰"
+            title: "Check for updates"
+            subtitle: "Refresh the pinned filen runtime and regenerate units"
+            hasCursor: root.cursorActive && root.focusSection === "updates"
+            onTriggered: root.runSetup("update")
+            onHoveredIn: root.setSection("updates")
           }
 
           // ---- settings (read-only surface of barWidget.schema) ----

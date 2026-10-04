@@ -97,6 +97,7 @@ function stateLabel(state) {
     case "failed": return "Failed"
     case "needs-auth": return "Sign-in needed"
     case "stopped": return "Stopped"
+    case "not-installed": return "Not installed"
     default: return "Off"
   }
 }
@@ -107,6 +108,7 @@ function stateGlyph(state) {
     case "mounting": return GLYPH_MOUNTING
     case "failed": return GLYPH_ALERT
     case "needs-auth": return GLYPH_ALERT
+    case "not-installed": return GLYPH_STOPPED
     default: return GLYPH_STOPPED
   }
 }
@@ -123,6 +125,80 @@ function stateFor(status) {
   if (unit === "failed") return "failed"
   if (status.running === true) return "mounted"
   return "stopped"
+}
+
+// Not-installed is its own state, not a signed-out one: the panel must offer
+// Install (not Set up) and the bar must not show an auth alert. `stateFor` keeps
+// the tested credential-flag mapping; this derives the display state on top.
+function displayState(status) {
+  var s = status || {}
+  if (s.ok === false) return "failed"
+  if (s.installed === false) return "not-installed"
+  return stateFor(s)
+}
+
+// The one action each condition wants, derived from the status contract rather
+// than ad-hoc flag combinations in the panel. Returns a plain object of booleans
+// so each row's `visible` binds to one source of truth, and so the rule set is
+// unit-testable without QML. A signed-out state never offers Mount; a failed
+// unit never offers Mount either (it needs Repair first).
+function noActions() {
+  return {
+    install: false,
+    setup: false,
+    mount: false,
+    autoLogin: false,
+    repair: false,
+    updates: false,
+    files: false,
+    journalHint: false
+  }
+}
+
+function panelActions(status) {
+  if (status === null || status === undefined) return noActions()
+
+  // The status helper itself failed: `setup install` is idempotent, so offer
+  // Repair and the unit log. Installed-ness is unknown, so nothing else shows.
+  if (status.ok === false) {
+    var broken = noActions()
+    broken.repair = true
+    broken.journalHint = true
+    return broken
+  }
+
+  var installed = status.installed === true
+  if (!installed) {
+    var missing = noActions()
+    missing.install = true
+    return missing
+  }
+
+  var authenticated = status.authenticated === true
+  if (!authenticated) {
+    var auth = noActions()
+    auth.setup = true
+    auth.updates = true
+    return auth
+  }
+
+  // Installed and signed in, but the unit failed: repair, never mount; point at
+  // the unit's journal (H10).
+  if (String(status.unitState || "") === "failed") {
+    var failed = noActions()
+    failed.repair = true
+    failed.updates = true
+    failed.journalHint = true
+    return failed
+  }
+
+  // Installed, signed in, unit healthy: mount when stopped, unmount when running.
+  var live = noActions()
+  live.mount = true
+  live.autoLogin = true
+  live.updates = true
+  live.files = status.running === true
+  return live
 }
 
 function fileUri(path) {
@@ -162,6 +238,9 @@ if (typeof module !== "undefined") {
     stateLabel: stateLabel,
     stateGlyph: stateGlyph,
     stateFor: stateFor,
+    displayState: displayState,
+    noActions: noActions,
+    panelActions: panelActions,
     fileUri: fileUri,
     formatRelativeTime: formatRelativeTime
   }

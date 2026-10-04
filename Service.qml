@@ -55,9 +55,13 @@ Item {
   // drops the user's mount.
   property bool _settingsInitialized: false
 
+  // `displayState` folds not-installed into its own state (so the bar/panel do
+  // not read an uninstalled plugin as "sign-in needed"); `stateFor`'s
+  // credential-flag mapping is unchanged underneath. The optimistic override
+  // still wins so a control click reflects immediately (H04).
   readonly property string state: _pendingState !== ""
     ? _pendingState
-    : Model.stateFor({ ok: ok, installed: installed, authenticated: authenticated, unitState: unitState, running: running })
+    : Model.displayState({ ok: ok, installed: installed, authenticated: authenticated, unitState: unitState, running: running })
   readonly property bool busy: statusProcess.running || controlProcess.running
 
   // ---------------------------------------------------------------- settings
@@ -166,8 +170,15 @@ Item {
   }
 
   function toggleMount() {
-    if (running || state === "mounting") unmount()
-    else if (state !== "needs-auth" && state !== "failed") mount()
+    if (running || state === "mounting") {
+      unmount()
+      return
+    }
+    // Only an installed, signed-in, healthy unit can be started: an
+    // unprovisioned plugin needs Set up, a failed unit needs Repair, and a
+    // not-installed one needs Install. The panel already hides the mount row in
+    // those states; this guard keeps the service honest for any other caller.
+    if (installed && authenticated && state !== "failed" && state !== "not-installed") mount()
   }
 
   // Autostart only: this enables/disables the unit for future logins and must
