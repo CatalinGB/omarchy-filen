@@ -1,0 +1,689 @@
+#!/usr/bin/env bash
+#
+# bin/setup -- idempotent install / uninstall / provisioning for the
+# filen.storage Omarchy plugin.
+#
+#   setup                     Install the pinned filen binary, pre-seed rclone,
+#                             write the systemd user units, daemon-reload.
+#   setup install             Same as above (explicit).
+#   setup provision           Interactive: export the Filen auth config, encrypt
+#                             it as a systemd user credential (shred plaintext).
+#   setup uninstall           Remove the generated units (keep the credential).
+#   setup uninstall --purge   Also delete the stored credential.
+#   setup check               Report missing prerequisites (exit 1 if any).
+#   setup export-fragment ... Credentialed producer run by filen-status.service.
+#
+# Hidden, side-effect-free helpers used by the test suite:
+#   setup render-unit NAME
+#   setup asset-name [ARCH] [LIBC]
+#   setup rclone-target [ARCH]
+#   setup check-marker FILE
+#
+set -euo pipefail
+
+PLUGIN_ID="filen.storage"
+MANAGED_MARKER="# Managed by the filen.storage Omarchy plugin; do not edit."
+FILEN_VERSION="0.2.8"
+FILEN_RELEASES_REPO="FilenCloudDienste/filen-cli-releases"
+RCLONE_VERSION="1.74.2"
+# Embedded from filen-rclone-wrapper/src/rclone_installation.rs (v0.2.8).
+RCLONE_CHECKSUM_LINUX_AMD64="72a806370072015ccbe4d81bcd348cc5eaf3beca6c65ba693fd43fb31fcca5b1"
+RCLONE_CHECKSUM_LINUX_ARM64="bc2b2eb8269b743ed7bcea869f3782cfb4931e41efa53fc8befc6dc8308b7a50"
+
+SELF="$(realpath "${BASH_SOURCE[0]}")"
+
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+DATA_DIR="${XDG_DATA_HOME}/omarchy-filen"
+FILEN_BIN="${DATA_DIR}/bin/filen"
+RCLONE_DIR="${DATA_DIR}/rclone"
+UNIT_DIR="${XDG_CONFIG_HOME}/systemd/user"
+CRED_DIR="${XDG_CONFIG_HOME}/credstore.encrypted"
+CREDENTIAL="${CRED_DIR}/filen-auth"
+
+MOUNT_ROOT="${OMARCHY_FILEN_MOUNT_ROOT:-$HOME/Filen}"
+CACHE_SIZE="${OMARCHY_FILEN_CACHE_SIZE:-4G}"
+RECENTS="${OMARCHY_FILEN_RECENTS:-15}"
+
+RELOAD_NEEDED=0
+
+PLUGIN_UNITS=("filen-mount.service" "filen-status.service" "filen-status.timer")
+
+# ------------------------------------------------------------------ output
+
+say()  { printf '%s\n' "$*"; }
+warn() { printf 'setup: warning: %s\n' "$*" >&2; }
+die()  { printf 'setup: error: %s\n' "$*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+usage() {
+  cat <<'EOF'
+Usage: setup [COMMAND]
+
+  (no command) / install    Install filen, pre-seed rclone, write units.
+  provision                 Sign in and store the encrypted credential.
+  uninstall [--purge]       Remove generated units (--purge also credential).
+  check                     Report missing prerequisites.
+  help                      Show this help.
+EOF
+}
+
+# ------------------------------------------------------------- pure helpers
+
+detect_arch_label() {
+  case "$(uname -m)" in
+    x86_64|amd64)   printf 'x86_64\n' ;;
+    aarch64|arm64)  printf 'aarch64\n' ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+}
+
+detect_rclone_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64)  printf 'amd64\n' ;;
+    aarch64|arm64) printf 'arm64\n' ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+}
+
+detect_libc() {
+  if have ldd && ldd --version 2>&1 | grep -qi musl; then
+    printf 'musl\n'
+  else
+    printf 'gnu\n'
+  fi
+}
+
+# Release asset for the pinned filen build, e.g.
+#   filen-cli-0.2.8-x86_64-unknown-linux-gnu
+asset_name() {
+  local arch="${1:-}" libc="${2:-}"
+  [[ -n "$arch" ]] || arch="$(detect_arch_label)"
+  [[ -n "$libc" ]] || libc="$(detect_libc)"
+  case "$arch" in x86_64|aarch64) ;; *) die "unsupported architecture: $arch" ;; esac
+  case "$libc" in gnu|musl) ;; *) die "unsupported libc: $libc" ;; esac
+  printf 'filen-cli-%s-%s-unknown-linux-%s\n' "$FILEN_VERSION" "$arch" "$libc"
+}
+
+# The exact filename filen-rs expects under --config-dir for its managed
+# rclone, e.g. rclone-v1.74.2-linux-amd64.
+rclone_arch_label() {
+  local arch="${1:-}"
+  [[ -n "$arch" ]] || arch="$(detect_rclone_arch)"
+  case "$arch" in
+    x86_64|amd64)  printf 'amd64\n' ;;
+    aarch64|arm64) printf 'arm64\n' ;;
+    *) die "unsupported rclone architecture: $arch" ;;
+  esac
+}
+
+rclone_target() {
+  printf 'rclone-v%s-linux-%s\n' "$RCLONE_VERSION" "$(rclone_arch_label "$@")"
+}
+
+rclone_checksum() {
+  case "$(rclone_arch_label "$@")" in
+    amd64) printf '%s\n' "$RCLONE_CHECKSUM_LINUX_AMD64" ;;
+    arm64) printf '%s\n' "$RCLONE_CHECKSUM_LINUX_ARM64" ;;
+  esac
+}
+
+# Quote a value for use as a systemd ExecStart argument.
+systemd_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//%/%%}"
+  printf '"%s"' "$value"
+}
+
+# A unit is "ours" only if it is a regular file carrying the exact marker line.
+unit_file_is_managed() {
+  local file="$1"
+  [[ -f "$file" && ! -L "$file" ]] || return 1
+  grep -Fqx "$MANAGED_MARKER" "$file" 2>/dev/null
+}
+
+sha256_of() {
+  python3 -c '
+import hashlib, sys
+h = hashlib.sha256()
+with open(sys.argv[1], "rb") as fh:
+    for chunk in iter(lambda: fh.read(1 << 20), b""):
+        h.update(chunk)
+print(h.hexdigest())
+' "$1"
+}
+
+systemd_version() {
+  local out=""
+  if have systemd-creds; then
+    out="$(systemd-creds --version 2>/dev/null | head -n1 || true)"
+  fi
+  [[ -n "$out" ]] || out="$(systemd --version 2>/dev/null | head -n1 || true)"
+  printf '%s\n' "$out" | grep -oE '[0-9]+' | head -n1
+}
+
+# ------------------------------------------------------------- unit render
+
+render_mount_unit() {
+  local rclone_name filen_q rclone_q mount_q
+  rclone_name="$(rclone_target)"
+  filen_q="$(systemd_quote "$FILEN_BIN")"
+  rclone_q="$(systemd_quote "${RCLONE_DIR}/${rclone_name}")"
+  mount_q="$(systemd_quote "$MOUNT_ROOT")"
+  cat <<EOF
+$MANAGED_MARKER
+[Unit]
+Description=Filen network drive (managed rclone)
+Documentation=https://github.com/FilenCloudDienste/filen-rs
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+LoadCredentialEncrypted=filen-auth
+RuntimeDirectory=filen
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/ln -sf $rclone_q %t/filen/$rclone_name
+ExecStart=$filen_q --skip-update --config-dir %t/filen --auth-config-path %d/filen-auth mount --cache-size $CACHE_SIZE $mount_q
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+}
+
+render_status_unit() {
+  local rclone_name setup_q filen_q rclone_q
+  rclone_name="$(rclone_target)"
+  setup_q="$(systemd_quote "$SELF")"
+  filen_q="$(systemd_quote "$FILEN_BIN")"
+  rclone_q="$(systemd_quote "${RCLONE_DIR}/${rclone_name}")"
+  cat <<EOF
+$MANAGED_MARKER
+[Unit]
+Description=Filen status fragment (quota and recent files)
+Documentation=https://github.com/FilenCloudDienste/filen-rs
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+LoadCredentialEncrypted=filen-auth
+ExecStartPre=/usr/bin/mkdir -p %t/filen
+ExecStartPre=/usr/bin/ln -sf $rclone_q %t/filen/$rclone_name
+ExecStart=$setup_q export-fragment --filen $filen_q --config-dir %t/filen --auth-config-path %d/filen-auth --out %t/filen/api-status.json --recents $RECENTS
+EOF
+}
+
+render_status_timer() {
+  cat <<EOF
+$MANAGED_MARKER
+[Unit]
+Description=Periodically refresh the Filen status fragment
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+AccuracySec=1min
+Persistent=false
+Unit=filen-status.service
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+render_unit() {
+  case "${1:-}" in
+    filen-mount|filen-mount.service)       render_mount_unit ;;
+    filen-status.service|status-service)   render_status_unit ;;
+    filen-status.timer|status-timer)       render_status_timer ;;
+    *) die "unknown unit: ${1:-} (mount|status-service|status-timer)" ;;
+  esac
+}
+
+# ---------------------------------------------------------------- systemd
+
+daemon_reload() {
+  if ! have systemctl; then
+    warn "systemctl not found; skipping daemon-reload"
+    return 0
+  fi
+  if systemctl --user daemon-reload; then
+    say "Reloaded the systemd user manager."
+  else
+    warn "systemctl --user daemon-reload failed"
+  fi
+  return 0
+}
+
+write_unit() {
+  local name="$1" content="$2" file tmp
+  file="${UNIT_DIR}/${name}"
+  if [[ -e "$file" || -L "$file" ]]; then
+    unit_file_is_managed "$file" ||
+      die "refusing to overwrite a unit not owned by ${PLUGIN_ID}: $file"
+  fi
+  mkdir -p "$UNIT_DIR"
+  tmp="$(mktemp "${UNIT_DIR}/.${name}.XXXXXX")"
+  printf '%s\n' "$content" > "$tmp"
+  chmod 0644 "$tmp"
+  if [[ -f "$file" ]] && cmp -s "$tmp" "$file"; then
+    rm -f "$tmp"
+    say "Unchanged: $file"
+    return 0
+  fi
+  mv "$tmp" "$file"
+  say "Installed $file"
+  RELOAD_NEEDED=1
+  return 0
+}
+
+precheck_units() {
+  local name file
+  for name in "${PLUGIN_UNITS[@]}"; do
+    file="${UNIT_DIR}/${name}"
+    if [[ -e "$file" || -L "$file" ]]; then
+      unit_file_is_managed "$file" ||
+        die "refusing to overwrite a unit not owned by ${PLUGIN_ID}: $file"
+    fi
+  done
+  return 0
+}
+
+install_units() {
+  RELOAD_NEEDED=0
+  write_unit "filen-mount.service"   "$(render_mount_unit)"
+  write_unit "filen-status.service"  "$(render_status_unit)"
+  write_unit "filen-status.timer"    "$(render_status_timer)"
+  if (( RELOAD_NEEDED )); then
+    daemon_reload
+  else
+    say "systemd units already up to date."
+  fi
+  enable_status_timer
+}
+
+enable_status_timer() {
+  have systemctl || return 0
+  if systemctl --user enable --now filen-status.timer >/dev/null 2>&1; then
+    say "Enabled filen-status.timer."
+  else
+    warn "could not enable filen-status.timer"
+  fi
+  return 0
+}
+
+# --------------------------------------------------------------- prereqs
+
+require_for_install() {
+  have curl || die "curl is required to download the filen binary"
+  have python3 || die "python3 is required (would be used for checksums/extraction)"
+  local version
+  version="$(systemd_version)"
+  if [[ -z "$version" || "$version" -lt 256 ]]; then
+    die "systemd >= 256 is required (systemd-creds encrypt --user); found ${version:-none}"
+  fi
+  have fusermount3 ||
+    warn "fusermount3 (fuse3) not found; the mount will not work until fuse3 is installed"
+  return 0
+}
+
+cmd_check() {
+  local missing=0 version
+  if have fusermount3; then
+    say "ok      fuse3 (fusermount3)"
+  else
+    say "missing fuse3 (fusermount3)"; missing=1
+  fi
+  if have python3; then
+    say "ok      python3"
+  else
+    say "missing python3"; missing=1
+  fi
+  version="$(systemd_version)"
+  if [[ -n "$version" && "$version" -ge 256 ]]; then
+    say "ok      systemd ${version} (>= 256)"
+  else
+    say "missing systemd >= 256 (found ${version:-none})"; missing=1
+  fi
+  if have curl; then
+    say "ok      curl"
+  else
+    say "missing curl"; missing=1
+  fi
+  return "$missing"
+}
+
+# ----------------------------------------------------------------- filen
+
+expected_filen_digest() {
+  local asset="$1"
+  if [[ -n "${OMARCHY_FILEN_SHA256:-}" ]]; then
+    printf '%s\n' "$OMARCHY_FILEN_SHA256"
+    return 0
+  fi
+  have curl || return 1
+  curl -fsSL "https://api.github.com/repos/${FILEN_RELEASES_REPO}/releases/tags/${FILEN_VERSION}" 2>/dev/null |
+    python3 -c '
+import json, sys
+name = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+for asset in data.get("assets", []):
+    if asset.get("name") == name:
+        digest = (asset.get("digest") or "").replace("sha256:", "")
+        if digest:
+            print(digest)
+        break
+' "$asset"
+}
+
+install_filen() {
+  if [[ -x "$FILEN_BIN" ]]; then
+    say "filen already installed at $FILEN_BIN (skipping download)."
+    return 0
+  fi
+  local asset url digest actual tmp
+  asset="$(asset_name)"
+  url="https://github.com/${FILEN_RELEASES_REPO}/releases/download/${FILEN_VERSION}/${asset}"
+  mkdir -p "$(dirname "$FILEN_BIN")"
+  tmp="$(mktemp "${DATA_DIR}/.filen.XXXXXX")"
+  say "Downloading ${asset} ..."
+  if ! curl -fSL --retry 3 -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    die "download failed: $url"
+  fi
+  digest="$(expected_filen_digest "$asset" || true)"
+  if [[ -n "$digest" ]]; then
+    actual="$(sha256_of "$tmp")"
+    if [[ "$actual" != "$digest" ]]; then
+      rm -f "$tmp"
+      die "checksum mismatch for ${asset} (expected ${digest}, got ${actual})"
+    fi
+  else
+    warn "no release checksum available for ${asset}; skipping verification"
+  fi
+  chmod 0755 "$tmp"
+  mv "$tmp" "$FILEN_BIN"
+  say "Installed filen ${FILEN_VERSION} at ${FILEN_BIN}."
+}
+
+# ---------------------------------------------------------------- rclone
+
+seed_rclone() {
+  local target checksum url tmpdir actual
+  target="$(rclone_target)"
+  if [[ -x "${RCLONE_DIR}/${target}" ]]; then
+    say "rclone ${RCLONE_VERSION} already pre-seeded (skipping download)."
+    return 0
+  fi
+  if ! have curl || ! have python3; then
+    warn "curl/python3 missing; skipping rclone pre-seed (the mount will fetch it)"
+    return 0
+  fi
+  checksum="$(rclone_checksum)"
+  url="https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/${target}.zip"
+  mkdir -p "$RCLONE_DIR"
+  tmpdir="$(mktemp -d)"
+  say "Pre-seeding rclone ${RCLONE_VERSION} ..."
+  if ! curl -fSL --retry 3 -o "${tmpdir}/${target}.zip" "$url"; then
+    warn "could not download rclone; the mount will fetch it on first start"
+    rm -rf "$tmpdir"
+    return 0
+  fi
+  actual="$(sha256_of "${tmpdir}/${target}.zip")"
+  if [[ "$actual" != "$checksum" ]]; then
+    warn "rclone checksum mismatch; skipping pre-seed"
+    rm -rf "$tmpdir"
+    return 0
+  fi
+  python3 - "${tmpdir}/${target}.zip" "${target}/rclone" "${RCLONE_DIR}/${target}" <<'PY'
+import os, shutil, sys, zipfile
+zip_path, member, dest = sys.argv[1], sys.argv[2], sys.argv[3]
+with zipfile.ZipFile(zip_path) as archive, archive.open(member) as src, open(dest, "wb") as out:
+    shutil.copyfileobj(src, out)
+os.chmod(dest, 0o755)
+PY
+  rm -rf "$tmpdir"
+  say "Pre-seeded rclone at ${RCLONE_DIR}/${target}."
+}
+
+# --------------------------------------------------------------- commands
+
+cmd_install() {
+  require_for_install
+  precheck_units
+  install_filen
+  seed_rclone
+  install_units
+  if [[ ! -f "$CREDENTIAL" ]]; then
+    say "Next: run '$(basename "$SELF") provision' in a terminal to sign in to Filen."
+  fi
+}
+
+cmd_provision() {
+  [[ -x "$FILEN_BIN" ]] || die "the filen binary is missing; run 'setup install' first"
+  have systemd-creds || die "systemd-creds is required (systemd >= 256)"
+  local version
+  version="$(systemd_version)"
+  if [[ -z "$version" || "$version" -lt 256 ]]; then
+    die "systemd >= 256 is required; found ${version:-none}"
+  fi
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    die "provisioning is interactive; run 'setup provision' in a terminal"
+  fi
+
+  local tmp config plaintext staged
+  tmp="$(mktemp -d)"
+  config="${tmp}/config"
+  plaintext=""
+  mkdir -p "$config"
+  cleanup_provision() {
+    [[ -n "$plaintext" && -f "$plaintext" ]] && shred -u "$plaintext" 2>/dev/null || true
+    rm -rf "$tmp"
+  }
+  trap cleanup_provision EXIT
+
+  say "Sign in to Filen (email/password/2FA). A temporary auth config is written"
+  say "to a private directory and shredded immediately after encryption."
+  ( cd "$tmp" && "$FILEN_BIN" --skip-update --config-dir "$config" export-auth-config )
+
+  plaintext="${config}/filen-cli-auth-config.txt"
+  [[ -f "$plaintext" ]] || plaintext="${tmp}/filen-cli-auth-config.txt"
+  [[ -f "$plaintext" ]] || die "export-auth-config did not produce a plaintext auth config"
+
+  mkdir -p "$CRED_DIR"
+  chmod 0700 "$CRED_DIR" 2>/dev/null || true
+  staged="$(mktemp "${CRED_DIR}/.filen-auth.XXXXXX")"
+  systemd-creds encrypt --user --name=filen-auth "$plaintext" "$staged"
+  chmod 0600 "$staged"
+  mv "$staged" "$CREDENTIAL"
+  shred -u "$plaintext" 2>/dev/null || rm -f "$plaintext"
+  plaintext=""
+  trap - EXIT
+  rm -rf "$tmp"
+  say "Stored the encrypted credential at ${CREDENTIAL}."
+}
+
+cmd_uninstall() {
+  local purge="${1:-}" unit file
+  precheck_units
+  for unit in filen-status.timer filen-status.service filen-mount.service; do
+    file="${UNIT_DIR}/${unit}"
+    [[ -e "$file" || -L "$file" ]] || continue
+    unit_file_is_managed "$file" ||
+      die "refusing to remove a unit not owned by ${PLUGIN_ID}: $file"
+    have systemctl && systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+    rm -f "$file"
+    say "Removed $file"
+  done
+  daemon_reload
+  if [[ "$purge" == "--purge" || "$purge" == "purge" ]]; then
+    if [[ -e "$CREDENTIAL" ]]; then
+      rm -f "$CREDENTIAL"
+      say "Removed credential $CREDENTIAL"
+    else
+      say "No stored credential to remove."
+    fi
+  else
+    say "Kept the stored credential ($CREDENTIAL). Use --purge to remove it."
+  fi
+}
+
+# Credentialed producer invoked by filen-status.service. Builds the non-secret
+# API fragment from `stat /`, `list-recents` and one `stat` per recent file.
+# Always writes valid JSON and exits 0 once it has written (or tried to).
+cmd_export_fragment() {
+  local filen="$FILEN_BIN" config_dir="" auth="" out="" recents="$RECENTS"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --filen)            filen="${2:?}"; shift 2 ;;
+      --config-dir)       config_dir="${2:?}"; shift 2 ;;
+      --auth-config-path) auth="${2:?}"; shift 2 ;;
+      --out)              out="${2:?}"; shift 2 ;;
+      --recents)          recents="${2:?}"; shift 2 ;;
+      *) die "export-fragment: unknown argument: $1" ;;
+    esac
+  done
+  [[ -n "$config_dir" ]] || config_dir="${XDG_RUNTIME_DIR}/filen"
+  [[ -n "$out" ]] || out="${config_dir}/api-status.json"
+  [[ -x "$filen" ]] || die "export-fragment: filen binary not found: $filen"
+  have python3 || die "export-fragment: python3 is required"
+
+  FRAG_FILEN="$filen" \
+  FRAG_CONFIG="$config_dir" \
+  FRAG_AUTH="$auth" \
+  FRAG_OUT="$out" \
+  FRAG_RECENTS="$recents" \
+  python3 - <<'PY'
+import json, os, subprocess, time
+from datetime import datetime, timezone
+
+
+def tail(text):
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def to_epoch(value):
+    if value is None or isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip()
+    if not text or text.lower() == "null":
+        return 0
+    try:
+        return int(float(text))
+    except ValueError:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def run(args):
+    proc = subprocess.run(args, capture_output=True, text=True)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+filen = os.environ["FRAG_FILEN"]
+config_dir = os.environ["FRAG_CONFIG"]
+auth = os.environ.get("FRAG_AUTH", "")
+out = os.environ["FRAG_OUT"]
+try:
+    limit = max(0, int(os.environ.get("FRAG_RECENTS", "15")))
+except ValueError:
+    limit = 15
+
+base = [filen, "--skip-update", "--json", "--config-dir", config_dir]
+if auth:
+    base += ["--auth-config-path", auth]
+
+fragment = {"ok": False, "checkedAt": int(time.time()), "files": []}
+try:
+    code, stdout, stderr = run(base + ["stat", "/"])
+    if code != 0:
+        raise RuntimeError(tail(stderr) or "stat / failed")
+    drive = json.loads(stdout)
+    used = int(drive.get("usedStorage") or 0)
+    quota = int(drive.get("totalStorage") or 0)
+    fragment["ok"] = True
+    fragment["usedBytes"] = used
+    fragment["quotaBytes"] = quota
+    fragment["quotaKnown"] = quota > 0
+    fragment["usagePercent"] = (
+        round(min(max(used / quota * 100.0, 0.0), 100.0), 2) if quota else 0.0
+    )
+
+    code, stdout, _ = run(base + ["list-recents"])
+    if code == 0:
+        try:
+            recents = json.loads(stdout)
+        except ValueError:
+            recents = {}
+        paths = [p for p in recents.get("files", []) if isinstance(p, str)][:limit]
+        files = []
+        for path in paths:
+            item_code, item_out, _ = run(base + ["stat", path])
+            if item_code != 0:
+                continue
+            try:
+                item = json.loads(item_out)
+            except ValueError:
+                continue
+            files.append({
+                "name": item.get("name") or os.path.basename(path.rstrip("/")),
+                "path": path,
+                "folder": os.path.dirname(path) or "/",
+                "modifiedTs": to_epoch(item.get("modified")),
+                "sizeBytes": int(item.get("size") or 0),
+            })
+        fragment["files"] = files
+except Exception as exc:
+    fragment["ok"] = False
+    fragment["error"] = str(exc)[:200]
+
+os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+tmp = "{}.tmp.{}".format(out, os.getpid())
+with open(tmp, "w", encoding="utf-8") as handle:
+    json.dump(fragment, handle, separators=(",", ":"))
+os.chmod(tmp, 0o600)
+os.replace(tmp, out)
+PY
+}
+
+# --------------------------------------------------------------- dispatch
+
+main() {
+  local command="${1:-install}"
+  shift || true
+  case "$command" in
+    install|"")        cmd_install "$@" ;;
+    provision)         cmd_provision "$@" ;;
+    uninstall)         cmd_uninstall "${1:-}" ;;
+    check|doctor)      cmd_check ;;
+    export-fragment)   cmd_export_fragment "$@" ;;
+    render-unit)       render_unit "${1:-}" ;;
+    asset-name)        asset_name "${1:-}" "${2:-}" ;;
+    rclone-target)     rclone_target "${1:-}" ;;
+    check-marker)      unit_file_is_managed "${1:-}" ;;
+    help|-h|--help)    usage ;;
+    *) die "unknown command: $command (try 'setup help')" ;;
+  esac
+}
+
+main "$@"
