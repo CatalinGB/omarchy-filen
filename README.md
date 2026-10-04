@@ -7,6 +7,8 @@ encrypted cloud storage. A bar widget and panel show your mount status, storage
 usage, and recent files; your Filen drive mounts as an ordinary folder. Built on
 the [filen-rs](https://github.com/FilenCloudDienste/filen-rs) `filen` CLI.
 
+![Filen in the Omarchy bar](preview.png)
+
 ```mermaid
 flowchart LR
     NI["Not installed"] -->|Install| NA["Sign-in needed"]
