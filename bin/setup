@@ -623,7 +623,11 @@ cmd_provision() {
 }
 
 cmd_uninstall() {
-  local purge="${1:-}" unit file
+  local purge="${1:-}" unit file mount_root
+  # Capture the mount folder before the settings file is removed.
+  load_settings
+  mount_root="$MOUNT_ROOT"
+
   precheck_units
   for unit in filen-status.timer filen-status.service filen-mount.service; do
     file="${UNIT_DIR}/${unit}"
@@ -635,6 +639,37 @@ cmd_uninstall() {
     say "Removed $file"
   done
   daemon_reload
+
+  # Detach a stale FUSE mount left by a crash, then clear the runtime dir. Point
+  # at the real mount the user configured, not a default.
+  if [[ -n "$mount_root" ]] && mountpoint -q "$mount_root" 2>/dev/null; then
+    have fusermount3 && fusermount3 -uz "$mount_root" 2>/dev/null || true
+  fi
+  rm -rf "${XDG_RUNTIME_DIR}/filen" 2>/dev/null || true
+
+  # Plugin-owned data: the managed filen binary, the pre-seeded rclone, the
+  # version marker — all namespaced under omarchy-filen/, so nothing else uses
+  # them. We never install a system rclone, so no package is touched.
+  if [[ -d "$DATA_DIR" ]]; then
+    rm -rf "$DATA_DIR"
+    say "Removed plugin data $DATA_DIR (filen binary, pre-seeded rclone)."
+  fi
+
+  # Plugin-owned settings.
+  if [[ -d "${XDG_CONFIG_HOME}/omarchy-filen" ]]; then
+    rm -rf "${XDG_CONFIG_HOME}/omarchy-filen"
+    say "Removed plugin settings ${XDG_CONFIG_HOME}/omarchy-filen."
+  fi
+
+  # Remove the mount folder only when it is present and empty; never delete files.
+  if [[ -n "$mount_root" && -d "$mount_root" ]]; then
+    if rmdir "$mount_root" 2>/dev/null; then
+      say "Removed empty mount folder $mount_root."
+    else
+      say "Kept $mount_root (not empty)."
+    fi
+  fi
+
   if [[ "$purge" == "--purge" || "$purge" == "purge" ]]; then
     if [[ -e "$CREDENTIAL" ]]; then
       rm -f "$CREDENTIAL"
@@ -645,6 +680,10 @@ cmd_uninstall() {
   else
     say "Kept the stored credential ($CREDENTIAL). Use --purge to remove it."
   fi
+
+  say "Left untouched: any system rclone (this plugin never installs one),"
+  say "the Filen CLI's own config, and anything stored in Filen."
+  say "To remove the plugin checkout itself: omarchy plugin remove ${PLUGIN_ID}"
 }
 
 # Credentialed producer invoked by filen-status.service. Builds the non-secret

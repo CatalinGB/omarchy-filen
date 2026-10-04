@@ -450,6 +450,44 @@ class SetupTest(unittest.TestCase):
         self.assertIn("refusing", result.stderr)
         self.assertTrue(foreign.exists())
 
+    def test_uninstall_removes_plugin_data_and_settings(self):
+        self.h.seed_binaries()
+        self.h.run("install")
+        self.assertTrue(self.h.data_dir.exists())
+        self.assertTrue(self.h.settings_file.exists())
+
+        result = self.h.run("uninstall")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.h.data_dir.exists())
+        self.assertFalse((self.h.config / "omarchy-filen").exists())
+
+    def test_uninstall_removes_empty_mount_folder_only(self):
+        self.h.seed_binaries()
+        self.h.run("install")
+        mount = self.h.home / "Filen"
+        mount.mkdir(parents=True, exist_ok=True)
+
+        self.assertEqual(self.h.run("uninstall").returncode, 0)
+        self.assertFalse(mount.exists())
+
+        self.h.run("install")
+        mount.mkdir(parents=True, exist_ok=True)
+        (mount / "keep.txt").write_text("data", encoding="utf-8")
+
+        self.assertEqual(self.h.run("uninstall").returncode, 0)
+        self.assertTrue((mount / "keep.txt").exists())
+
+    def test_uninstall_leaves_the_filen_cli_config_alone(self):
+        self.h.seed_binaries()
+        self.h.run("install")
+        cli_config = self.h.config / "filen-cli" / "filen-cli-auth-config.txt"
+        cli_config.parent.mkdir(parents=True, exist_ok=True)
+        cli_config.write_text("secret", encoding="utf-8")
+
+        self.assertEqual(self.h.run("uninstall").returncode, 0)
+        self.assertTrue(cli_config.exists())
+
     # -------------------------------------------------------- check / provision
 
     def test_check_reports_prerequisites(self):
