@@ -10,7 +10,7 @@ change (see [pin maintenance](pin-maintenance.md)). Do not conflate them.
 ## Versioning
 
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html), tracked in
-`manifest.json` `version` (currently `0.1.0`) and listed in `CHANGELOG.md`
+`manifest.json` `version` (currently `0.2.0`) and listed in `CHANGELOG.md`
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
 - **MAJOR** — a change that breaks existing installs without a migration.

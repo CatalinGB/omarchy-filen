@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-04
+
 ### Added
 
 - `setup doctor` — reports pinned vs installed `filen`, the rclone seed, the unit
@@ -31,6 +33,13 @@ and this project adheres to
   refresh cadences, the bar label, and a new **Show recent files** toggle
   (`showRecents`). Changes write the plugin's own `shell.json` entry and take
   effect immediately.
+- [docs/architecture.md](docs/architecture.md) Mermaid diagrams (component and
+  provisioning), a [CONTRIBUTING.md](CONTRIBUTING.md), and a
+  [VM testing](docs/vm-testing.md) guide with
+  [`scripts/omarchy-filen-vm.sh`](scripts/omarchy-filen-vm.sh) for running the
+  live E2E on a fresh QEMU/KVM Omarchy.
+- CI reports `bin/status` line coverage (~93%); Dependabot and a weekly
+  upstream-pin check keep tracked dependencies current.
 
 ### Changed
 

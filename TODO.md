@@ -23,7 +23,7 @@ so they are left open on purpose. Everything else in
 - [ ] **H14 — full live E2E.** Run `tests/e2e/live.sh` on a clean Omarchy box
   end to end (it automates the deterministic steps and prompts once for the
   sign-in).
-- [ ] **H16 — release.** After merge, tag `v0.1.0` and confirm
+- [ ] **H16 — release.** After merge, tag `v0.2.0` and confirm
   `omarchy plugin update` on an installed copy.
 
 Known, intentional limitations (not bugs) are recorded in
