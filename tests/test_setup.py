@@ -190,11 +190,11 @@ class SetupTest(unittest.TestCase):
             "LoadCredentialEncrypted=filen-auth",
             "ConditionPathExists=%E/credstore.encrypted/filen-auth",
             "mount-run --config-dir %t/filen --auth-config-path %d/filen-auth",
-            "ExecStartPre=/usr/bin/ln -sf",
         ):
             self.assertIn(token, unit)
-        rclone = self.h.run("rclone-target").stdout.strip()
-        self.assertIn(f"%t/filen/{rclone}", unit)
+        # The rclone pre-seed happens inside the wrapper (filen-rs looks under
+        # <config-dir>/rclone/), so the unit itself carries no ExecStartPre.
+        self.assertNotIn("ExecStartPre=", unit)
         # The mount root and cache size are now live settings, not baked in.
         self.assertNotIn("--cache-size", unit)
         self.assertNotIn(str(self.h.home / "Filen"), unit)

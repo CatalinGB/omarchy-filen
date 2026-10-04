@@ -175,10 +175,8 @@ systemd_version() {
 # ------------------------------------------------------------- unit render
 
 render_mount_unit() {
-  local rclone_name setup_q rclone_q
-  rclone_name="$(rclone_target)"
+  local setup_q
   setup_q="$(systemd_quote "$SELF")"
-  rclone_q="$(systemd_quote "${RCLONE_DIR}/${rclone_name}")"
   cat <<EOF
 $MANAGED_MARKER
 [Unit]
@@ -193,7 +191,6 @@ Type=simple
 LoadCredentialEncrypted=filen-auth
 RuntimeDirectory=filen
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/ln -sf $rclone_q %t/filen/$rclone_name
 ExecStart=$setup_q mount-run --config-dir %t/filen --auth-config-path %d/filen-auth
 Restart=on-failure
 RestartSec=5
@@ -206,11 +203,9 @@ EOF
 }
 
 render_status_unit() {
-  local rclone_name setup_q filen_q rclone_q
-  rclone_name="$(rclone_target)"
+  local setup_q filen_q
   setup_q="$(systemd_quote "$SELF")"
   filen_q="$(systemd_quote "$FILEN_BIN")"
-  rclone_q="$(systemd_quote "${RCLONE_DIR}/${rclone_name}")"
   cat <<EOF
 $MANAGED_MARKER
 [Unit]
@@ -223,7 +218,6 @@ After=graphical-session.target
 Type=oneshot
 LoadCredentialEncrypted=filen-auth
 ExecStartPre=/usr/bin/mkdir -p %t/filen
-ExecStartPre=/usr/bin/ln -sf $rclone_q %t/filen/$rclone_name
 ExecStart=$setup_q export-fragment --filen $filen_q --config-dir %t/filen --auth-config-path %d/filen-auth --out %t/filen/api-status.json --recents $RECENTS
 EOF
 }
@@ -543,6 +537,19 @@ cmd_mount_run() {
       "$FILEN_BIN" --skip-update --config-dir "$config_dir" --auth-config-path "$auth" \
       mount --cache-size "$CACHE_SIZE" "$MOUNT_ROOT"
     return 0
+  fi
+  # filen-rs (0.2.8) looks for its managed rclone at
+  #   <config-dir>/rclone/<rclone-name>
+  # so pre-seed that exact path from our persistent copy. Without it, filen
+  # tries to download rclone at unit start and panics.
+  local rclone_name seed
+  rclone_name="$(rclone_target)"
+  seed="${RCLONE_DIR}/${rclone_name}"
+  mkdir -p "${config_dir}/rclone"
+  if [[ -x "$seed" ]]; then
+    ln -sf "$seed" "${config_dir}/rclone/${rclone_name}"
+  else
+    warn "rclone pre-seed missing at ${seed}; filen will try to download it"
   fi
   exec "$FILEN_BIN" --skip-update --config-dir "$config_dir" --auth-config-path "$auth" \
     mount --cache-size "$CACHE_SIZE" "$MOUNT_ROOT"
