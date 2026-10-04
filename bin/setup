@@ -19,6 +19,7 @@
 #   setup asset-name [ARCH] [LIBC]
 #   setup rclone-target [ARCH]
 #   setup check-marker FILE
+#   setup wait-mount MOUNT_ROOT [TIMEOUT]
 #
 set -euo pipefail
 
@@ -72,6 +73,7 @@ Usage: setup [COMMAND]
   uninstall [--purge]       Remove generated units (--purge also credential).
   --uninstall [--purge]     Alias for 'uninstall'.
   check                     Report missing prerequisites.
+  doctor                    Report pin/install/mount health (1 if unhealthy).
   help                      Show this help.
 EOF
 }
@@ -185,17 +187,20 @@ Documentation=https://github.com/FilenCloudDienste/filen-rs
 ConditionPathExists=%E/credstore.encrypted/filen-auth
 After=graphical-session.target
 PartOf=graphical-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
 LoadCredentialEncrypted=filen-auth
 # Note: do NOT add RuntimeDirectory here. On systemd 261 a unit with both
 # RuntimeDirectory and LoadCredentialEncrypted fails credential setup with
-# "File exists"; the wrapper creates %t/filen itself.
+# "File exists"; the wrapper creates %t/filen itself. See ADR 0005.
 ExecStartPre=/usr/bin/mkdir -p %t/filen
 ExecStart=$setup_q mount-run --config-dir %t/filen --auth-config-path %d/filen-auth
 Restart=on-failure
 RestartSec=5
+TimeoutStartSec=60
 KillMode=mixed
 TimeoutStopSec=30
 
@@ -264,6 +269,37 @@ daemon_reload() {
     warn "systemctl --user daemon-reload failed"
   fi
   return 0
+}
+
+# Poll for the mount to appear, bounded by TIMEOUT seconds (default 30). Also
+# gives up early when the mount unit has landed in `failed`. Prints a clear
+# "Mounted" line on success; on timeout prints an actionable hint and returns
+# non-zero. Never blocks longer than TIMEOUT. This is the smoke check run by
+# `provision`, and a hidden test helper (`wait-mount`).
+wait_for_mount() {
+  local mount_root="$1" timeout="${2:-30}" waited=0 state=""
+  while :; do
+    if mountpoint -q "$mount_root" 2>/dev/null; then
+      say "Mounted: $mount_root"
+      return 0
+    fi
+    if have systemctl; then
+      state="$(systemctl --user show -p ActiveState --value omarchy-filen-mount.service 2>/dev/null || true)"
+      if [[ "$state" == "failed" ]]; then
+        break
+      fi
+    fi
+    if (( waited >= timeout )); then
+      break
+    fi
+    sleep 1
+    waited=$(( waited + 1 ))
+  done
+  warn "the mount at $mount_root did not come up within ${timeout}s."
+  warn "inspect the service log:"
+  warn "  journalctl --user -u omarchy-filen-mount.service"
+  warn "if the credential was rejected, re-run '$(basename "$SELF") provision'."
+  return 1
 }
 
 write_unit() {
@@ -362,6 +398,69 @@ cmd_check() {
     say "missing curl"; missing=1
   fi
   return "$missing"
+}
+
+# Report install health: pinned vs installed filen, the rclone seed, the unit
+# files, the credential, and the mount unit state. Non-zero when the install is
+# unhealthy so it can gate scripted checks (H19).
+cmd_doctor() {
+  local unhealthy=0 installed version_file target seed unit file state
+  version_file="${DATA_DIR}/filen.version"
+
+  if [[ -x "$FILEN_BIN" ]]; then
+    installed="$(cat "$version_file" 2>/dev/null || true)"
+    if [[ "$installed" == "$FILEN_VERSION" ]]; then
+      say "ok      filen ${FILEN_VERSION} (installed)"
+    else
+      say "stale   filen pinned ${FILEN_VERSION}, installed ${installed:-none}"
+      unhealthy=1
+    fi
+  else
+    say "missing filen binary at ${FILEN_BIN} (run 'setup install')"
+    unhealthy=1
+  fi
+
+  target="$(rclone_target)"
+  seed="${RCLONE_DIR}/${target}"
+  if [[ -x "$seed" ]]; then
+    say "ok      rclone seed ${target}"
+  else
+    say "missing rclone seed ${target}"
+    unhealthy=1
+  fi
+
+  for unit in "${PLUGIN_UNITS[@]}"; do
+    file="${UNIT_DIR}/${unit}"
+    if [[ -f "$file" ]]; then
+      say "ok      unit ${unit}"
+    else
+      say "missing unit ${unit} (run 'setup install')"
+      unhealthy=1
+    fi
+  done
+
+  if [[ -e "$CREDENTIAL" ]]; then
+    say "ok      credential present"
+  else
+    say "missing credential (run 'setup provision')"
+    unhealthy=1
+  fi
+
+  if have systemctl; then
+    state="$(systemctl --user show -p ActiveState --value omarchy-filen-mount.service 2>/dev/null || true)"
+    [[ -n "$state" ]] || state="unknown"
+    say "mount   omarchy-filen-mount.service: ${state}"
+    [[ "$state" == "failed" ]] && unhealthy=1
+  else
+    say "mount   unknown (systemctl not found)"
+  fi
+
+  if (( unhealthy )); then
+    say "doctor: unhealthy"
+    return 1
+  fi
+  say "doctor: healthy"
+  return 0
 }
 
 # ----------------------------------------------------------------- filen
@@ -616,9 +715,11 @@ cmd_provision() {
   mkdir -p "$CRED_DIR"
   chmod 0700 "$CRED_DIR" 2>/dev/null || true
   staged="$(mktemp "${CRED_DIR}/.filen-auth.XXXXXX")"
+  # Encrypt into a staged file, then atomically replace any existing credential,
+  # so re-running during rotation never leaves a partial blob behind.
   systemd-creds encrypt --user --name=filen-auth "$plaintext" "$staged"
   chmod 0600 "$staged"
-  mv "$staged" "$CREDENTIAL"
+  mv -f "$staged" "$CREDENTIAL"
   shred -u "$plaintext" 2>/dev/null || rm -f "$plaintext"
   plaintext=""
   trap - EXIT
@@ -626,12 +727,15 @@ cmd_provision() {
   say "Stored the encrypted credential at ${CREDENTIAL}."
 
   if have systemctl; then
-    if systemctl --user enable --now omarchy-filen-mount.service; then
-      say "Enabled and started omarchy-filen-mount.service: mounted now and at login."
-    else
+    if ! systemctl --user enable --now omarchy-filen-mount.service; then
       warn "could not enable omarchy-filen-mount.service; start it from the panel or run"
       warn "  systemctl --user enable --now omarchy-filen-mount.service"
+      exit 1
     fi
+    say "Enabled and started omarchy-filen-mount.service: mounted now and at login."
+    # Confirm the mount actually came up before declaring success.
+    load_settings
+    wait_for_mount "$MOUNT_ROOT" 30
   else
     warn "systemctl not found; omarchy-filen-mount.service was not enabled"
   fi
@@ -765,6 +869,17 @@ def run(args):
     return proc.returncode, proc.stdout, proc.stderr
 
 
+# A credential that is rejected produces a distinctive stderr; anything else
+# (offline, DNS, timeout) is a transport failure and must not be reported as an
+# authentication problem.
+AUTH_HINTS = ("email", "password", "2fa", "two-factor", "auth", "unauthor")
+
+
+def looks_like_auth_error(text):
+    low = (text or "").lower()
+    return any(hint in low for hint in AUTH_HINTS)
+
+
 filen = os.environ["FRAG_FILEN"]
 config_dir = os.environ["FRAG_CONFIG"]
 auth = os.environ.get("FRAG_AUTH", "")
@@ -782,11 +897,14 @@ fragment = {"ok": False, "checkedAt": int(time.time()), "files": []}
 try:
     code, stdout, stderr = run(base + ["stat", "/"])
     if code != 0:
+        if looks_like_auth_error(stderr):
+            fragment["authenticated"] = False
         raise RuntimeError(tail(stderr) or "stat / failed")
     drive = json.loads(stdout)
     used = int(drive.get("usedStorage") or 0)
     quota = int(drive.get("totalStorage") or 0)
     fragment["ok"] = True
+    fragment["authenticated"] = True
     fragment["usedBytes"] = used
     fragment["quotaBytes"] = quota
     fragment["quotaKnown"] = quota > 0
@@ -843,12 +961,14 @@ main() {
     mount-run)         cmd_mount_run "$@" ;;
     provision)         cmd_provision "$@" ;;
     uninstall|--uninstall) cmd_uninstall "${1:-}" ;;
-    check|doctor)      cmd_check ;;
+    check)             cmd_check ;;
+    doctor)            cmd_doctor ;;
     export-fragment)   cmd_export_fragment "$@" ;;
     render-unit)       render_unit "${1:-}" ;;
     asset-name)        asset_name "${1:-}" "${2:-}" ;;
     rclone-target)     rclone_target "${1:-}" ;;
     check-marker)      unit_file_is_managed "${1:-}" ;;
+    wait-mount)        wait_for_mount "${1:-}" "${2:-30}" ;;
     help|-h|--help)    usage ;;
     *) die "unknown command: $command (try 'setup help')" ;;
   esac

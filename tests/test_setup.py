@@ -31,6 +31,24 @@ case "$*" in
 esac
 """
 
+# Stands in for `filen export-auth-config` during provisioning: it writes the
+# plaintext auth config into --config-dir, varying it by FAKE_PLAINTEXT so a
+# re-provision can be told apart.
+FAKE_PROVISION_FILEN = """#!/usr/bin/env bash
+config=""; prev=""
+for arg in "$@"; do
+  [[ "$prev" == "--config-dir" ]] && config="$arg"
+  prev="$arg"
+done
+case "$*" in
+  *export-auth-config)
+    mkdir -p "$config"
+    printf '%s\\n' "${FAKE_PLAINTEXT:-secret}" > "$config/filen-cli-auth-config.txt"
+    exit 0 ;;
+esac
+exit 0
+"""
+
 
 def write_exec(path, body):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,13 +108,30 @@ class Harness:
     def _install_fakes(self):
         write_exec(
             self.fake_bin / "systemctl",
-            '#!/usr/bin/env bash\necho "systemctl $*" >> "$SYSTEMCTL_LOG"\nexit 0\n',
+            "#!/usr/bin/env bash\n"
+            'echo "systemctl $*" >> "$SYSTEMCTL_LOG"\n'
+            'if [[ "$1" == "--user" && "$2" == "show" && "$3" == "-p" '
+            '&& "$4" == "ActiveState" ]]; then\n'
+            '  echo "${FAKE_ACTIVESTATE:-}"\n'
+            "fi\n"
+            "exit 0\n",
         )
         write_exec(
             self.fake_bin / "systemd-creds",
-            '#!/usr/bin/env bash\nif [[ "$1" == "--version" ]]; then echo "systemd 261 (261.1)"; fi\nexit 0\n',
+            "#!/usr/bin/env bash\n"
+            'if [[ "$1" == "--version" ]]; then echo "systemd 261 (261.1)"; fi\n'
+            'if [[ "$1" == "encrypt" ]]; then\n'
+            '  src="${@: -2:1}"; dst="${@: -1}"\n'
+            "  printf 'ENC:' > \"$dst\"\n"
+            '  cat "$src" >> "$dst"\n'
+            "fi\n"
+            "exit 0\n",
         )
         write_exec(self.fake_bin / "fusermount3", "#!/usr/bin/env bash\nexit 0\n")
+        write_exec(
+            self.fake_bin / "mountpoint",
+            '#!/usr/bin/env bash\nexit "${FAKE_MOUNTPOINT_RC:-1}"\n',
+        )
         write_exec(
             self.fake_bin / "curl",
             '#!/usr/bin/env bash\necho "curl $*" >> "$SYSTEMCTL_LOG"\nexit 1\n',
@@ -122,6 +157,39 @@ class Harness:
             stdin=subprocess.DEVNULL,
             timeout=30,
         )
+
+    def run_tty(self, *args):
+        """Run setup with a pseudo-terminal so the interactive guard passes.
+
+        Returns (returncode, combined_output). All commands setup invokes are
+        fakes on PATH, so nothing touches the real system.
+        """
+        import pty
+
+        master, slave = pty.openpty()
+        try:
+            proc = subprocess.Popen(
+                [str(SETUP), *args],
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                env=self.env,
+                close_fds=True,
+            )
+            os.close(slave)
+            chunks = []
+            while True:
+                try:
+                    data = os.read(master, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                chunks.append(data)
+            proc.wait(timeout=30)
+            return proc.returncode, b"".join(chunks).decode(errors="replace")
+        finally:
+            os.close(master)
 
 
 class SetupTest(unittest.TestCase):
@@ -202,6 +270,24 @@ class SetupTest(unittest.TestCase):
         self.assertNotIn(str(self.h.home / "Filen"), unit)
         self.assertIn(str(SETUP), unit)
 
+    # H01: no generated unit may combine RuntimeDirectory= with
+    # LoadCredentialEncrypted=; on systemd 261 that fails credential setup
+    # ("File exists"). See docs/adr/0005-mount-unit-credential-quirks.md.
+    def test_no_unit_combines_runtime_directory_and_credential(self):
+        for name in ("filen-mount", "filen-status.service", "filen-status.timer"):
+            unit = self.h.run("render-unit", name).stdout
+            self.assertFalse(
+                "RuntimeDirectory=" in unit and "LoadCredentialEncrypted=" in unit,
+                f"{name} combines RuntimeDirectory= with LoadCredentialEncrypted=",
+            )
+
+    # H02: bound the restart storm and the first mount attempt.
+    def test_mount_unit_restart_bounds(self):
+        unit = self.h.run("render-unit", "filen-mount").stdout
+        self.assertIn("StartLimitIntervalSec=60", unit)
+        self.assertIn("StartLimitBurst=5", unit)
+        self.assertIn("TimeoutStartSec=60", unit)
+
     def test_status_unit_render(self):
         unit = self.h.run("render-unit", "filen-status.service").stdout
         self.assertIn(MARKER, unit)
@@ -224,6 +310,28 @@ class SetupTest(unittest.TestCase):
 
     def test_unknown_unit_is_rejected(self):
         self.assertNotEqual(self.h.run("render-unit", "definitely-not-a-unit").returncode, 0)
+
+    # -------------------------------------------------------- mount smoke check
+
+    def test_wait_mount_reports_mounted(self):
+        self.h.env["FAKE_MOUNTPOINT_RC"] = "0"
+        result = self.h.run("wait-mount", str(self.h.tmp / "mnt"), "2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Mounted:", result.stdout)
+
+    def test_wait_mount_times_out_actionably_and_bounded(self):
+        self.h.env["FAKE_MOUNTPOINT_RC"] = "1"
+        result = self.h.run("wait-mount", str(self.h.tmp / "mnt"), "1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not come up", result.stderr)
+        self.assertIn("journalctl --user -u omarchy-filen-mount.service", result.stderr)
+
+    def test_wait_mount_gives_up_early_when_unit_failed(self):
+        self.h.env["FAKE_MOUNTPOINT_RC"] = "1"
+        self.h.env["FAKE_ACTIVESTATE"] = "failed"
+        result = self.h.run("wait-mount", str(self.h.tmp / "mnt"), "30")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not come up", result.stderr)
 
     # -------------------------------------------------------------- settings
 
@@ -499,6 +607,40 @@ class SetupTest(unittest.TestCase):
         self.assertIn("ok      python3", result.stdout)
         self.assertIn("systemd 261", result.stdout)
 
+    # ------------------------------------------------------------------ doctor
+
+    def test_doctor_reports_healthy_after_install(self):
+        self.h.seed_binaries()
+        self.h.run("install")
+        self.h.credential.parent.mkdir(parents=True, exist_ok=True)
+        self.h.credential.write_text("blob", encoding="utf-8")
+
+        result = self.h.run("doctor")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("doctor: healthy", result.stdout)
+        self.assertIn("ok      filen 0.2.9", result.stdout)
+        self.assertIn("ok      rclone seed", result.stdout)
+        self.assertIn("ok      credential present", result.stdout)
+
+    def test_doctor_reports_unhealthy_when_not_installed(self):
+        result = self.h.run("doctor")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("doctor: unhealthy", result.stdout)
+        self.assertIn("missing filen binary", result.stdout)
+
+    def test_doctor_flags_stale_pin(self):
+        self.h.seed_binaries()
+        self.h.run("install")
+        self.h.credential.parent.mkdir(parents=True, exist_ok=True)
+        self.h.credential.write_text("blob", encoding="utf-8")
+        (self.h.data_dir / "filen.version").write_text("0.2.0\n", encoding="utf-8")
+
+        result = self.h.run("doctor")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("stale   filen pinned 0.2.9, installed 0.2.0", result.stdout)
+
     def test_provision_requires_a_terminal(self):
         self.h.seed_binaries()
 
@@ -506,6 +648,51 @@ class SetupTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("interactive", result.stderr)
+
+    # ------------------------------------------------------------- provision
+
+    def test_provision_stores_credential_and_confirms_mount(self):
+        self.h.seed_binaries()
+        write_exec(self.h.filen_bin, FAKE_PROVISION_FILEN)
+        self.h.env["FAKE_PLAINTEXT"] = "secret-one"
+        self.h.env["FAKE_MOUNTPOINT_RC"] = "0"
+
+        rc, out = self.h.run_tty("provision")
+
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(self.h.credential.exists())
+        self.assertIn("secret-one", self.h.credential.read_text(encoding="utf-8"))
+        self.assertIn("Mounted:", out)
+
+    def test_provision_rerun_replaces_credential(self):
+        self.h.seed_binaries()
+        write_exec(self.h.filen_bin, FAKE_PROVISION_FILEN)
+        self.h.env["FAKE_MOUNTPOINT_RC"] = "0"
+
+        self.h.env["FAKE_PLAINTEXT"] = "secret-one"
+        self.assertEqual(self.h.run_tty("provision")[0], 0)
+        first = self.h.credential.read_text(encoding="utf-8")
+
+        self.h.env["FAKE_PLAINTEXT"] = "secret-two"
+        self.assertEqual(self.h.run_tty("provision")[0], 0)
+        second = self.h.credential.read_text(encoding="utf-8")
+
+        self.assertIn("secret-two", second)
+        self.assertNotIn("secret-one", second)
+        self.assertNotEqual(first, second)
+
+    def test_provision_reports_smoke_check_failure(self):
+        self.h.seed_binaries()
+        write_exec(self.h.filen_bin, FAKE_PROVISION_FILEN)
+        self.h.env["FAKE_PLAINTEXT"] = "secret"
+        self.h.env["FAKE_MOUNTPOINT_RC"] = "1"
+        self.h.env["FAKE_ACTIVESTATE"] = "failed"
+
+        rc, out = self.h.run_tty("provision")
+
+        self.assertNotEqual(rc, 0)
+        self.assertIn("did not come up", out)
+        self.assertIn("journalctl --user -u omarchy-filen-mount.service", out)
 
     # -------------------------------------------------------- fragment producer
 
@@ -530,6 +717,7 @@ class SetupTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         fragment = json.loads(out.read_text(encoding="utf-8"))
         self.assertIs(fragment["ok"], True)
+        self.assertIs(fragment["authenticated"], True)
         self.assertEqual(fragment["usedBytes"], 1000)
         self.assertEqual(fragment["quotaBytes"], 4000)
         self.assertIs(fragment["quotaKnown"], True)
@@ -563,6 +751,50 @@ class SetupTest(unittest.TestCase):
         self.assertIs(fragment["ok"], False)
         self.assertIn("error", fragment)
         self.assertIsInstance(fragment["checkedAt"], int)
+
+    def test_export_fragment_marks_rejected_credential(self):
+        fake = write_exec(
+            self.h.tmp / "filen-rejected",
+            "#!/usr/bin/env bash\necho 'invalid password or 2FA required' >&2\nexit 2\n",
+        )
+        out = self.h.tmp / "api-status.json"
+
+        result = self.h.run(
+            "export-fragment",
+            "--filen",
+            str(fake),
+            "--config-dir",
+            str(self.h.tmp),
+            "--out",
+            str(out),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fragment = json.loads(out.read_text(encoding="utf-8"))
+        self.assertIs(fragment["ok"], False)
+        self.assertIs(fragment["authenticated"], False)
+
+    def test_export_fragment_omits_authenticated_on_network_failure(self):
+        fake = write_exec(
+            self.h.tmp / "filen-offline",
+            "#!/usr/bin/env bash\necho 'connection timed out' >&2\nexit 1\n",
+        )
+        out = self.h.tmp / "api-status.json"
+
+        result = self.h.run(
+            "export-fragment",
+            "--filen",
+            str(fake),
+            "--config-dir",
+            str(self.h.tmp),
+            "--out",
+            str(out),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fragment = json.loads(out.read_text(encoding="utf-8"))
+        self.assertIs(fragment["ok"], False)
+        self.assertNotIn("authenticated", fragment)
 
 
 if __name__ == "__main__":
