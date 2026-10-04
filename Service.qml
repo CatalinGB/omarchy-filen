@@ -21,6 +21,9 @@ Item {
   property var shell: null
   property var settings: ({})
 
+  // The plugin's own id, for the settings window's persistence path.
+  readonly property string pluginId: "io.github.catalingb.filen"
+
   // ---------------------------------------------------------------- state
 
   property bool ok: true
@@ -85,6 +88,19 @@ Item {
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 15, 5, 300)
   readonly property int apiRefreshMin: intSetting("apiRefreshMin", 10, 5, 240)
   readonly property bool showLabel: setting("showLabel", false) === true
+
+  // Write a change into the plugin's own shell.json entry. Used by the
+  // settings window; the widget's forwarded copy converges when the shell
+  // re-injects, and the mount-affecting keys still flow to settings.conf via
+  // the existing mountRoot/cache/apiRefreshMin change handlers below.
+  function persistSettings(values) {
+    var entry = { id: pluginId }
+    for (var existing in settings) if (existing !== "id") entry[existing] = settings[existing]
+    for (var key in values) entry[key] = values[key]
+    settings = entry
+    if (shell && typeof shell.updateEntryInline === "function")
+      shell.updateEntryInline(pluginId, entry)
+  }
 
   // The API fragment ages out at twice the refresh cadence. This is the single
   // source for that number: `refresh()` passes it to the status helper as
@@ -384,6 +400,41 @@ Item {
   onMountRootChanged: pushMountSettings()
   onCacheMaxSizeGBChanged: pushMountSettings()
   onApiRefreshMinChanged: pushMountSettings()
+
+  // ---------------------------------------------------------------- window
+  //
+  // The full configuration surface is a separate window (SettingsWindow.qml),
+  // loaded on first use. It is owned here rather than by the bar widget, so it
+  // works whenever the plugin is enabled, and every edit goes through
+  // persistSettings above.
+  property bool _pendingSettingsShow: false
+
+  function openSettings() {
+    settingsWindowLoader.active = true
+    if (settingsWindowLoader.item) settingsWindowLoader.item.show()
+    else _pendingSettingsShow = true
+  }
+
+  function closeSettings() {
+    if (settingsWindowLoader.item) settingsWindowLoader.item.hide()
+  }
+
+  readonly property bool settingsVisible: settingsWindowLoader.item
+    ? settingsWindowLoader.item.shown === true : false
+
+  Loader {
+    id: settingsWindowLoader
+    active: false
+    asynchronous: true
+    source: Qt.resolvedUrl("SettingsWindow.qml")
+    onLoaded: {
+      if (item) item.service = root
+      if (root._pendingSettingsShow && item) {
+        root._pendingSettingsShow = false
+        item.show()
+      }
+    }
+  }
 
   // Nothing destructive: the startup poll is timer-driven (`triggeredOnStart`).
   // This service never authenticates, never reads the credential, and never

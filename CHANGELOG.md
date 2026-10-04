@@ -10,9 +10,9 @@ and this project adheres to
 
 ### Added
 
-- A cogwheel in the panel opens a full **Settings** view — grouped storage /
-  refresh / panel options plus **Reset to defaults** — with Back or Esc
-  returning to the status view.
+- A cogwheel in the panel opens a separate **Settings** window — storage /
+  refresh / panel options, mount-at-login, and **Reset to defaults** — dismissed
+  by Esc, a click outside, or its close button.
 
 ## [0.2.0] - 2026-10-04
 

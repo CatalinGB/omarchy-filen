@@ -88,7 +88,7 @@ password is ever typed into the panel.
   Nautilus.
 - **Mount / Unmount** — control the mount for this session.
 - **Mount at login** — toggle automatic mounting.
-- **Settings** — the cogwheel (top-right) opens a full configuration view.
+- **Settings** — the cogwheel (top-right) opens a separate settings window.
 - **Open from the menu (optional)** — merge
   [`contrib/omarchy-menu-filen.jsonc.example`](contrib/omarchy-menu-filen.jsonc.example)
   to add web / terminal / mount entries to the Omarchy menu.
@@ -98,11 +98,12 @@ stopped → mounted), so problems surface without opening the panel.
 
 ## Settings
 
-Click the **cogwheel** (top-right of the panel) to open the Settings view: mount
-folder, cache limit, refresh cadences, the bar label, whether recent files
-appear, and **Reset to defaults**. Each change is written to the plugin's own
-entry in `~/.config/omarchy/shell.json` and takes effect immediately; Back or
-**Esc** returns to the status view.
+Click the **cogwheel** (top-right of the panel) to open a separate **Settings
+window**: mount folder, cache limit, refresh cadences, the bar label, whether
+recent files appear, mount-at-login, and **Reset to defaults**. Each change is
+written to the plugin's own entry in `~/.config/omarchy/shell.json` and takes
+effect immediately. Close it with the **✕** (top-right), **Esc**, or a click
+outside.
 
 | Setting | Default | Notes |
 |---|---|---|
