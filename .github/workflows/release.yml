@@ -1,0 +1,75 @@
+# A tag push builds a *draft* GitHub Release for that tag, with the matching
+# CHANGELOG section as its notes. Nothing is announced by the workflow: a person
+# reviews the draft and publishes it, matching the runbook in docs/release.md.
+#
+# A plugin ships no build artifacts, so the job's work is the release gate
+# (the full suite + `omarchy plugin validate`) and the notes.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+
+      - name: Install dev tools
+        run: python3 -m pip install --upgrade pip -r requirements-dev.txt
+
+      - name: Tests + coverage
+        run: |
+          python3 -m coverage run -m unittest discover -s tests
+          python3 -m coverage report
+          node tests/model.test.js
+
+      - name: Validate plugin (if omarchy available)
+        run: |
+          if command -v omarchy >/dev/null 2>&1; then
+            omarchy plugin validate .
+          else
+            echo "omarchy not installed; skipping manifest validation"
+          fi
+
+      - name: Create or refresh the draft release from CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+
+          # This release's section: from `## [version]` to the next `## [`.
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { grab = 1; next }
+            grab && index($0, "## [") == 1 { exit }
+            grab { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::warning::CHANGELOG.md has no section for ${version}; notes will be empty"
+          fi
+
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --draft --title "Filen ${tag}" --notes-file notes.md
+          elif [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit "$tag" --notes-file notes.md
+          else
+            echo "release ${tag} is already published; leaving its notes alone"
+          fi
