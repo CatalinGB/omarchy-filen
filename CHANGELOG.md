@@ -8,6 +8,21 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- [`docs/testing-standard.md`](docs/testing-standard.md) — the "prove a test
+  fails against broken code" rule the suites follow.
+- ADRs [0006](docs/adr/0006-settings-window.md) (separate settings window) and
+  [0007](docs/adr/0007-namespaced-id.md) (the namespaced plugin id).
+- A tag-triggered **draft** release workflow, and an agent skill under
+  [`skills/`](skills/io.github.catalingb.filen/SKILL.md) documenting the plugin's
+  IPC surface.
+
+### Changed
+
+- Dependabot is monthly and grouped (minor/patch together, majors alone); CI
+  jobs gained a timeout and current action versions.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added
