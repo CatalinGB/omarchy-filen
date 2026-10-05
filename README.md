@@ -203,6 +203,8 @@ Uninstalling never touches anything stored in Filen.
   who owns it.
 - [docs/architecture.md](docs/architecture.md) — component and provisioning
   diagrams.
+- [docs/testing-standard.md](docs/testing-standard.md) — the "prove a test fails
+  against broken code" rule the suites follow.
 - [docs/pin-maintenance.md](docs/pin-maintenance.md) — how to bump the pinned
   `filen`/rclone versions, and what `setup doctor` reports.
 - [docs/release.md](docs/release.md) — the versioning/release runbook.

@@ -1,13 +1,26 @@
+# Monthly and grouped. Minor and patch bumps within an ecosystem arrive as one
+# PR; a major arrives alone, because a major is a migration and should pass or
+# fail on its own.
+#
+# Advisories are not this file's job: the pinned `filen`/rclone binaries are
+# checked by the weekly upstream-check workflow, and the plugin has no package
+# dependencies beyond `coverage` in requirements-dev.txt.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
 
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
+      interval: "monthly"
+    groups:
+      pip:
+        patterns: ["*"]
+        update-types: [minor, patch]

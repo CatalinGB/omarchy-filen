@@ -1,3 +1,14 @@
+# What every change must survive.
+#
+# Deliberately guarded rather than required, because the runner is Ubuntu, not
+# Omarchy: shellcheck, a Qt tool, and `omarchy plugin validate` each run only
+# when the tool is present. The release workflow re-runs validation on a tag.
+#
+# Deliberately not here:
+#   - no coverage gate: `bin/status` coverage is reported, not enforced yet.
+#   - no QML smoke run: the QML imports the in-shell `qs.*` modules and cannot
+#     load off an Omarchy session; the tag release/live pass is where it runs.
+
 name: CI
 
 on:
@@ -7,16 +18,17 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.x"
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
@@ -44,11 +56,11 @@ jobs:
       - name: QML syntax (if a Qt tool is available)
         run: |
           if command -v qmllint >/dev/null 2>&1; then
-            for qml in BarWidget.qml Panel.qml Service.qml; do
+            for qml in BarWidget.qml Panel.qml Service.qml SettingsWindow.qml; do
               qmllint --bare "$qml" || exit 1
             done
           elif command -v qmlformat >/dev/null 2>&1; then
-            for qml in BarWidget.qml Panel.qml Service.qml; do
+            for qml in BarWidget.qml Panel.qml Service.qml SettingsWindow.qml; do
               qmlformat "$qml" >/dev/null || exit 1
             done
           else

@@ -76,6 +76,9 @@ python3 -m pip install -r requirements-dev.txt
 python3 -m coverage run -m unittest discover -s tests && python3 -m coverage report
 ```
 
+Every test here follows [`docs/testing-standard.md`](docs/testing-standard.md):
+a test is not trusted until it has been shown to fail against the code it pins.
+
 ### Live end-to-end
 
 ```bash
