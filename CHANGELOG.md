@@ -8,6 +8,23 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-09
+
+### Security
+
+- Document the upstream `filen`/`rclone` command-line exposure: the pinned
+  `filen` 0.2.9 runs rclone with the RC password as `--rc-pass` (and the Filen
+  API key as an `obscure` argument), which other local users can read from a
+  world-readable `/proc/<pid>/cmdline`. This is a `filen-rs` defect, not the
+  plugin's; it is documented in [SECURITY.md](SECURITY.md) with the `hidepid=2`
+  mitigation and a draft report
+  ([docs/upstream-filen-rs-rclone-argv-secrets.md](docs/upstream-filen-rs-rclone-argv-secrets.md)).
+
+### Fixed
+
+- `bin/setup` now quotes `$` in unit `ExecStart` arguments (`$$`), so systemd
+  cannot expand a variable out of a path.
+
 ## [0.2.3] - 2026-10-09
 
 ### Security

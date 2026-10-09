@@ -165,6 +165,8 @@ systemd_quote() {
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
   value="${value//%/%%}"
+  # systemd expands $VAR/${VAR} in ExecStart; $$ is a literal $.
+  value="${value//\$/\$\$}"
   printf '"%s"' "$value"
 }
 

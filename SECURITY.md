@@ -59,6 +59,27 @@ Stated plainly so no one over-trusts the design:
    read your files — that is the point of a mount.
 6. **Cold-boot / DMA / compromised session** — out of scope for any userspace
    design.
+7. **Secrets on the upstream command lines (multi-user machines).** The pinned
+   `filen` 0.2.9 runs its managed `rclone` with the RC password as an argument
+   (`--rc-pass`, bound to `127.0.0.1`), and briefly passes the Filen API key to
+   `rclone obscure` the same way. On a host where `/proc` is world-readable
+   (no `hidepid`), **another local user can read those arguments** and use the
+   RC password to reach the mount's control API. This is upstream `filen-rs`
+   behaviour — the plugin only supplies the credential *path* and the config
+   directory; `filen-rs` builds the `rclone` command line. The plugin's own
+   processes are credential-free. Report draft:
+   [upstream-filen-rs-rclone-argv-secrets.md](docs/upstream-filen-rs-rclone-argv-secrets.md).
+
+### Mitigating the command-line exposure
+
+On a machine with more than one local user, hide process arguments from other
+users by mounting `/proc` with `hidepid=2` (for example via an `/etc/fstab`
+entry `proc /proc proc defaults,hidepid=2 0 0`, a kernel command-line
+`proc.hidepid=2`, or a small systemd mount unit). Then a user sees only their
+own process arguments. On a **single-user** machine the risk collapses to
+same-UID processes, which item 1 already covers. This is a system setting, not
+something the plugin can apply per unit — systemd's `ProtectProc=` restricts
+what a *unit* sees, not what others see of the unit.
 
 In short: **"no-knowledge" is about the plugin layer, not about eliminating the
 secret.** The plugin owns no credential; the secret still exists as ciphertext at
