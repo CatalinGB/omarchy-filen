@@ -24,6 +24,7 @@ checksum from the release asset's `digest` field (or `OMARCHY_FILEN_SHA256`).
 | Pin | Value | Source of truth |
 |---|---|---|
 | `filen` version | `FILEN_VERSION="0.2.9"` | `bin/setup` |
+| `filen` source repo | `FILEN_SOURCE_REPO="FilenCloudDienste/filen-rs"` | `bin/setup` (read only by the upstream-pin check) |
 | rclone version | `RCLONE_VERSION="1.74.2"` | `bin/setup` |
 | rclone checksums | `RCLONE_CHECKSUM_LINUX_AMD64` / `_ARM64` | `bin/setup` |
 | `filen` checksum | release asset `digest` | GitHub API at install time |
@@ -77,6 +78,13 @@ rclone's version and checksums are **embedded** in `bin/setup` (copied from
 filen-rs's own `rclone_installation.rs`), so a mismatch means the mount's rclone
 is re-downloaded or rejected — neither is fatal, but the pre-seed silently stops
 working.
+
+The weekly upstream check does **not** compare against the newest rclone release:
+it reads the rclone version the pinned `filen` vendors
+(`FILEN_SOURCE_REPO` → `filen-rclone-wrapper/src/rclone_installation.rs` at tag
+`filen-cli@v$FILEN_VERSION`) and flags the pin only when it disagrees with that.
+A newer rclone release on its own is not actionable — rclone ships far more often
+than filen-rs, and the plugin only ever runs the vendored build.
 
 1. Check which rclone version the target `filen` release pins
    (`rclone_installation.rs` upstream). The plugin must pre-seed the **same**

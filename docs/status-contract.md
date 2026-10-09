@@ -102,7 +102,7 @@ Failure document (the service always writes valid JSON):
 | `quotaBytes` | `stat /` → `totalStorage` | |
 | `usagePercent` | derived | `used/quota*100`, clamped; `0` when unknown |
 | `quotaKnown` | `stat /` success | |
-| `files[]` | `list-recents` + `stat` (ticket 04) | `{name,path,folder,modifiedTs,sizeBytes}`; `list-recents` → top K → `stat` each; slow cadence, cached |
+| `files[]` | `list-recents` + `stat` (ticket 04) | `{name,path,folder,modifiedTs,sizeBytes}`; `list-recents` → top K → `stat` each; slow cadence, cached. `path` is the **Filen-drive** path (rooted at `/`, e.g. `/a/one.txt`), not a local path; the panel joins it with `mountPath` before opening it. |
 | `checkedAt` | service | epoch seconds |
 
 ## 3. Live samples captured (binary 0.2.8, x86_64)

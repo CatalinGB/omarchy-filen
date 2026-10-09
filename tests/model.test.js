@@ -119,6 +119,36 @@ assertEqual(
 )
 assertEqual(Model.fileUri(""), "file://", "fileUri empty")
 
+assertEqual(typeof Model.localFilePath, "function", "localFilePath exported")
+assertEqual(
+  Model.localFilePath("/home/u/Filen", "/a/one.txt"),
+  "/home/u/Filen/a/one.txt", "localFilePath joins drive path to mount root"
+)
+assertEqual(
+  Model.localFilePath("/home/u/Filen/", "/a/one.txt"),
+  "/home/u/Filen/a/one.txt", "localFilePath ignores a trailing mount slash"
+)
+assertEqual(
+  Model.localFilePath("/home/u/Filen", "a/one.txt"),
+  "/home/u/Filen/a/one.txt", "localFilePath tolerates a missing leading slash"
+)
+assertEqual(
+  Model.localFilePath("/home/u/Filen", ""),
+  "/home/u/Filen", "localFilePath empty drive path"
+)
+assertEqual(
+  Model.localFilePath("", "/a/one.txt"),
+  "/a/one.txt", "localFilePath empty mount root"
+)
+assertEqual(
+  Model.fileUri(Model.localFilePath("/home/u/Filen", "/a/My File.txt")),
+  "file:///home/u/Filen/a/My%20File.txt", "localFilePath + fileUri round trip"
+)
+assertEqual(
+  Model.localFilePath(null, undefined),
+  "", "localFilePath nulls"
+)
+
 assertEqual(typeof Model.filesVisible, "function", "filesVisible exported")
 assertEqual(Model.filesVisible(true, 3, true), true, "filesVisible running+enabled+files")
 assertEqual(Model.filesVisible(true, 3, false), false, "filesVisible disabled hides")

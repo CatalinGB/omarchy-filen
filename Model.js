@@ -220,6 +220,18 @@ function fileUri(path) {
   return "file://" + parts.join("/")
 }
 
+// A recent file's `path` is the Filen-drive path from `list-recents` (rooted at
+// the drive, e.g. "/a/one.txt"), not a path on this machine. The local copy is
+// that path under the configured mount root, so joining the two is what makes a
+// click open the file that is actually mounted.
+function localFilePath(mountRoot, drivePath) {
+  var root = String(mountRoot === null || mountRoot === undefined ? "" : mountRoot).replace(/\/+$/, "")
+  var relative = String(drivePath === null || drivePath === undefined ? "" : drivePath)
+  if (relative === "") return root
+  if (root === "") return relative
+  return root + "/" + relative.replace(/^\/+/, "")
+}
+
 function formatRelativeTime(timestampSec, nowMs) {
   var ts = Number(timestampSec || 0)
   if (!isFinite(ts) || ts <= 0) return "Unknown time"
@@ -256,6 +268,7 @@ if (typeof module !== "undefined") {
     panelActions: panelActions,
     filesVisible: filesVisible,
     fileUri: fileUri,
+    localFilePath: localFilePath,
     formatRelativeTime: formatRelativeTime
   }
 }

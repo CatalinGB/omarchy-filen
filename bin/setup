@@ -27,8 +27,11 @@ PLUGIN_ID="io.github.catalingb.filen"
 MANAGED_MARKER="# Managed by the io.github.catalingb.filen Omarchy plugin; do not edit."
 FILEN_VERSION="0.2.9"
 FILEN_RELEASES_REPO="FilenCloudDienste/filen-cli-releases"
+# Source repo, used only by the upstream-pin check to read the rclone version
+# the pinned filen build vendors (filen-rclone-wrapper/src/rclone_installation.rs).
+FILEN_SOURCE_REPO="FilenCloudDienste/filen-rs"
 RCLONE_VERSION="1.74.2"
-# Embedded from filen-rclone-wrapper/src/rclone_installation.rs (v0.2.8).
+# Embedded from filen-rclone-wrapper/src/rclone_installation.rs (v0.2.9).
 RCLONE_CHECKSUM_LINUX_AMD64="72a806370072015ccbe4d81bcd348cc5eaf3beca6c65ba693fd43fb31fcca5b1"
 RCLONE_CHECKSUM_LINUX_ARM64="bc2b2eb8269b743ed7bcea869f3782cfb4931e41efa53fc8befc6dc8308b7a50"
 

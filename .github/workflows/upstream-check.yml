@@ -31,13 +31,14 @@ jobs:
 
           FILEN_VERSION="$(pin FILEN_VERSION bin/setup)"
           FILEN_RELEASES_REPO="$(pin FILEN_RELEASES_REPO bin/setup)"
+          FILEN_SOURCE_REPO="$(pin FILEN_SOURCE_REPO bin/setup)"
           RCLONE_VERSION="$(pin RCLONE_VERSION bin/setup)"
 
-          if [ -z "$FILEN_VERSION" ] || [ -z "$FILEN_RELEASES_REPO" ] || [ -z "$RCLONE_VERSION" ]; then
+          if [ -z "$FILEN_VERSION" ] || [ -z "$FILEN_RELEASES_REPO" ] || [ -z "$FILEN_SOURCE_REPO" ] || [ -z "$RCLONE_VERSION" ]; then
             echo "::error::failed to parse one or more pins from bin/setup"
             exit 1
           fi
-          echo "pins: filen=${FILEN_VERSION} repo=${FILEN_RELEASES_REPO} rclone=${RCLONE_VERSION}"
+          echo "pins: filen=${FILEN_VERSION} repo=${FILEN_RELEASES_REPO} source=${FILEN_SOURCE_REPO} rclone=${RCLONE_VERSION}"
 
           # --- Resolve the newest upstream tag ---------------------------
           # filen-rs ships pre-release tags, so /releases/latest does not
@@ -51,8 +52,27 @@ jobs:
           }
 
           FILEN_LATEST="$(latest_tag "$FILEN_RELEASES_REPO" | sed 's/^v//')"
-          RCLONE_LATEST="$(latest_tag "rclone/rclone" | sed 's/^v//')"
-          echo "latest: filen=${FILEN_LATEST:-<unresolved>} rclone=${RCLONE_LATEST:-<unresolved>}"
+          echo "latest: filen=${FILEN_LATEST:-<unresolved>}"
+
+          # --- Resolve the rclone the pinned filen build expects ----------
+          # filen-rs vendors a fixed rclone per CLI release in
+          # filen-rclone-wrapper/src/rclone_installation.rs; the plugin must
+          # pre-seed that exact build or filen ignores the seed. Comparing
+          # against the newest rclone release would be wrong — rclone ships far
+          # more often than filen-rs and the plugin only ever uses the vendored
+          # one. Returns empty (never fails the step) when unresolvable.
+          expected_rclone() {
+            local repo="$1" tag="$2"
+            [ -n "$repo" ] && [ -n "$tag" ] || return 1
+            gh api "repos/${repo}/contents/filen-rclone-wrapper/src/rclone_installation.rs?ref=filen-cli%40v${tag}" \
+              --jq '.content' 2>/dev/null \
+              | base64 -d 2>/dev/null \
+              | sed -n 's/.*RCLONE_VERSION: *&str *= *"\([^"]*\)".*/\1/p' \
+              | head -n1 || true
+          }
+
+          RCLONE_EXPECTED="$(expected_rclone "$FILEN_SOURCE_REPO" "$FILEN_VERSION")"
+          echo "rclone vendored by filen ${FILEN_VERSION}: ${RCLONE_EXPECTED:-<unresolved>}"
 
           # --- Decide whether a pin is behind ----------------------------
           # Uses version-sort so 0.2.10 > 0.2.9. An unresolved latest tag is
@@ -69,7 +89,9 @@ jobs:
           filen_behind=false
           rclone_behind=false
           if is_behind "$FILEN_VERSION" "$FILEN_LATEST"; then filen_behind=true; fi
-          if is_behind "$RCLONE_VERSION" "$RCLONE_LATEST"; then rclone_behind=true; fi
+          # rclone drifts only when it disagrees with the vendored version; a
+          # newer upstream rclone release on its own is not actionable.
+          if [ -n "$RCLONE_EXPECTED" ] && [ "$RCLONE_VERSION" != "$RCLONE_EXPECTED" ]; then rclone_behind=true; fi
 
           if [ "$filen_behind" = false ] && [ "$rclone_behind" = false ]; then
             echo "All pins are current (or upstream tag unresolvable); nothing to do."
@@ -81,16 +103,18 @@ jobs:
           DOCS_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/blob/HEAD/docs/pin-maintenance.md"
           BODY_FILE="$(mktemp)"
           {
-            echo "One or more upstream dependencies are newer than the pins in \`bin/setup\`."
+            echo "One or more pins in \`bin/setup\` disagree with what upstream expects."
             echo
-            echo "| Dependency | Pinned | Latest |"
+            echo "| Dependency | Pinned | Expected |"
             echo "|---|---|---|"
             if [ "$filen_behind" = true ]; then
-              echo "| \`filen\` (\`${FILEN_RELEASES_REPO}\`) | \`${FILEN_VERSION}\` | \`${FILEN_LATEST}\` |"
+              echo "| \`filen\` (\`${FILEN_RELEASES_REPO}\`) | \`${FILEN_VERSION}\` | \`${FILEN_LATEST}\` (newest release) |"
             fi
             if [ "$rclone_behind" = true ]; then
-              echo "| \`rclone\` | \`${RCLONE_VERSION}\` | \`${RCLONE_LATEST}\` |"
+              echo "| \`rclone\` (vendored by \`filen ${FILEN_VERSION}\`) | \`${RCLONE_VERSION}\` | \`${RCLONE_EXPECTED}\` |"
             fi
+            echo
+            echo "The rclone row compares against the version the pinned \`filen\` vendors, not the newest rclone release."
             echo
             echo "Follow [docs/pin-maintenance.md](${DOCS_URL}) to bump the pin(s)."
             echo

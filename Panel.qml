@@ -243,10 +243,14 @@ Panel {
   }
 
   // Opens Nautilus at the file's parent; mirrors the cloud/dropbox reference.
+  // `file.path` is the Filen-drive path from `list-recents`; resolve it under
+  // the mount root so the click lands on the mounted copy, not the bare drive
+  // path (which is not a local path and would not exist).
   function openFile(file) {
     if (!file || !file.path) return
+    var mountRoot = hasService ? String(filen.mountPath || "") : ""
     close()
-    Quickshell.execDetached(["uwsm-app", "--", "nautilus", Model.fileUri(String(file.path))])
+    Quickshell.execDetached(["uwsm-app", "--", "nautilus", Model.fileUri(Model.localFilePath(mountRoot, file.path))])
   }
 
   // Interactive provisioning/installation must happen in a real terminal, so

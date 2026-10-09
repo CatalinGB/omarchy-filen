@@ -8,6 +8,21 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-09
+
+### Fixed
+
+- Recent files opened in Nautilus at their **Filen-drive** path (e.g.
+  `/a/one.txt`) instead of the mounted local path under the configured mount
+  folder. The panel now joins the drive path with `mountPath` before opening it
+  (`Model.localFilePath`).
+- The weekly upstream-pin check no longer flags the `rclone` pin when it matches
+  the version the pinned `filen` vendors. It now reads that version from
+  `FILEN_SOURCE_REPO` (`FilenCloudDienste/filen-rs`,
+  `filen-rclone-wrapper/src/rclone_installation.rs`) at the `filen-cli@vX.Y.Z`
+  tag instead of comparing against the newest rclone release, which ships far
+  more often than `filen-rs` and is never what the plugin runs.
+
 ## [0.2.1] - 2026-10-09
 
 ### Added
