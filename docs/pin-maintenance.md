@@ -16,8 +16,11 @@ reproduction is in
 [upstream-filen-rs-0.2.8-mount-panic.md](upstream-filen-rs-0.2.8-mount-panic.md).
 
 Because a pre-release is not served by `/releases/latest`, `bin/setup` fetches
-the pinned tag directly (`releases/download/${FILEN_VERSION}/…`) and reads the
-checksum from the release asset's `digest` field (or `OMARCHY_FILEN_SHA256`).
+the pinned tag directly (`releases/download/${FILEN_VERSION}/…`) and verifies
+the download against a **SHA-256 pinned in `bin/setup`** (`FILEN_CHECKSUM_*`,
+one per arch/libc). The install fails closed: a mismatch — or a missing pin —
+refuses to install rather than running unverified bytes. `OMARCHY_FILEN_SHA256`
+overrides the pin for an out-of-band build.
 
 ## Where the pins live
 
@@ -27,7 +30,7 @@ checksum from the release asset's `digest` field (or `OMARCHY_FILEN_SHA256`).
 | `filen` source repo | `FILEN_SOURCE_REPO="FilenCloudDienste/filen-rs"` | `bin/setup` (read only by the upstream-pin check) |
 | rclone version | `RCLONE_VERSION="1.74.2"` | `bin/setup` |
 | rclone checksums | `RCLONE_CHECKSUM_LINUX_AMD64` / `_ARM64` | `bin/setup` |
-| `filen` checksum | release asset `digest` | GitHub API at install time |
+| `filen` checksums | `FILEN_CHECKSUM_{X86_64,AARCH64}_{GNU,MUSL}` | `bin/setup` (from the release asset `digest`) |
 
 The docs mirrors are listed in [release.md](release.md#keeping-the-pins-consistent);
 update them in the same change.
@@ -41,18 +44,18 @@ update them in the same change.
 2. **Confirm the assets.** They are `filen-cli-<version>-<arch>-unknown-linux-<libc>`
    for x86_64/aarch64 × gnu/musl. A missing asset for a supported arch blocks
    the bump.
-3. **Get the checksum.** The release asset carries a `sha256:` digest, visible
+3. **Get the checksums.** Each release asset carries a `sha256:` digest, visible
    in the GitHub API:
    ```bash
    curl -fsSL \
      "https://api.github.com/repos/FilenCloudDienste/filen-cli-releases/releases/tags/<version>" \
      | python3 -c 'import json,sys; [print(a["name"], a.get("digest")) for a in json.load(sys.stdin)["assets"]]'
    ```
-   `bin/setup` reads this automatically; there is no checksum to hand-edit for
-   `filen`. If a release ever lacks a digest, the install prints a warning and
-   skips verification — prefer a release that has one, or export
-   `OMARCHY_FILEN_SHA256` for a verified manual install.
-4. **Edit `bin/setup`:** set `FILEN_VERSION="<version>"`.
+   Every supported asset (x86_64/aarch64 × gnu/musl) must have one.
+4. **Edit `bin/setup`:** set `FILEN_VERSION="<version>"` and update the four
+   `FILEN_CHECKSUM_*` constants to the matching `sha256:` digests. There is no
+   runtime lookup: the install verifies against these pins and refuses to
+   install on a mismatch or a missing pin.
 5. **Update the docs mirrors** ([release.md](release.md#keeping-the-pins-consistent)).
 6. **Run the automated suite:**
    ```bash

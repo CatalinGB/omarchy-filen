@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.catalingb.filen",
   "name": "Filen",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": "CatalinGB",
   "license": "MIT",
   "description": "Filen end-to-end-encrypted cloud storage in the Omarchy bar: mount status, storage usage, and recent files, backed by a systemd-supervised FUSE mount.",

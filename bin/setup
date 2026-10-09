@@ -17,6 +17,7 @@
 # Hidden, side-effect-free helpers used by the test suite:
 #   setup render-unit NAME
 #   setup asset-name [ARCH] [LIBC]
+#   setup filen-checksum [ARCH] [LIBC]
 #   setup rclone-target [ARCH]
 #   setup check-marker FILE
 #   setup wait-mount MOUNT_ROOT [TIMEOUT]
@@ -29,11 +30,21 @@ FILEN_VERSION="0.2.9"
 FILEN_RELEASES_REPO="FilenCloudDienste/filen-cli-releases"
 # Source repo, used only by the upstream-pin check to read the rclone version
 # the pinned filen build vendors (filen-rclone-wrapper/src/rclone_installation.rs).
+# The check workflow reads this pin from this file.
+# shellcheck disable=SC2034
 FILEN_SOURCE_REPO="FilenCloudDienste/filen-rs"
 RCLONE_VERSION="1.74.2"
 # Embedded from filen-rclone-wrapper/src/rclone_installation.rs (v0.2.9).
 RCLONE_CHECKSUM_LINUX_AMD64="72a806370072015ccbe4d81bcd348cc5eaf3beca6c65ba693fd43fb31fcca5b1"
 RCLONE_CHECKSUM_LINUX_ARM64="bc2b2eb8269b743ed7bcea869f3782cfb4931e41efa53fc8befc6dc8308b7a50"
+# SHA-256 of each pinned filen release asset, from the release's `digest`
+# field. Pinned here rather than fetched at install time, so the installed
+# binary is bound to this reviewed commit and an install fails closed on any
+# mismatch. Verify with `gh api repos/${FILEN_RELEASES_REPO}/releases/tags/${FILEN_VERSION}`.
+FILEN_CHECKSUM_X86_64_GNU="a86b22a2d0f0f32cf4ff24113dbf57fc274d85bbc83f42f9f4c248a1767aca29"
+FILEN_CHECKSUM_X86_64_MUSL="9beec4db57991491f6464cb6eee8823bcf68a54a6b790133b6aa94717960ea8b"
+FILEN_CHECKSUM_AARCH64_GNU="166cffcf593fd7dfb1a8b93b75011c084caadb5ffcb9a58ff359ed5381c2c1a6"
+FILEN_CHECKSUM_AARCH64_MUSL="30e4293bffcc36a9a4ba95ea3f6c19b1c925bac61f29ebe17fae6d362da90703"
 
 SELF="$(realpath "${BASH_SOURCE[0]}")"
 
@@ -517,28 +528,24 @@ if isinstance(value, (int, float)) and not isinstance(value, bool):
 
 # ----------------------------------------------------------------- filen
 
-expected_filen_digest() {
-  local asset="$1"
+# SHA-256 for the pinned filen asset on this platform. Pinned in this file so
+# the install is bound to the reviewed commit; OMARCHY_FILEN_SHA256 overrides
+# it for an out-of-band build.
+filen_checksum() {
+  local arch="${1:-}" libc="${2:-}"
   if [[ -n "${OMARCHY_FILEN_SHA256:-}" ]]; then
     printf '%s\n' "$OMARCHY_FILEN_SHA256"
     return 0
   fi
-  have curl || return 1
-  curl -fsSL "https://api.github.com/repos/${FILEN_RELEASES_REPO}/releases/tags/${FILEN_VERSION}" 2>/dev/null |
-    python3 -c '
-import json, sys
-name = sys.argv[1]
-try:
-    data = json.load(sys.stdin)
-except ValueError:
-    sys.exit(0)
-for asset in data.get("assets", []):
-    if asset.get("name") == name:
-        digest = (asset.get("digest") or "").replace("sha256:", "")
-        if digest:
-            print(digest)
-        break
-' "$asset"
+  [[ -n "$arch" ]] || arch="$(detect_arch_label)"
+  [[ -n "$libc" ]] || libc="$(detect_libc)"
+  case "${arch}/${libc}" in
+    x86_64/gnu)   printf '%s\n' "$FILEN_CHECKSUM_X86_64_GNU" ;;
+    x86_64/musl)  printf '%s\n' "$FILEN_CHECKSUM_X86_64_MUSL" ;;
+    aarch64/gnu)  printf '%s\n' "$FILEN_CHECKSUM_AARCH64_GNU" ;;
+    aarch64/musl) printf '%s\n' "$FILEN_CHECKSUM_AARCH64_MUSL" ;;
+    *) return 1 ;;
+  esac
 }
 
 install_filen() {
@@ -557,15 +564,15 @@ install_filen() {
     rm -f "$tmp"
     die "download failed: $url"
   fi
-  digest="$(expected_filen_digest "$asset" || true)"
-  if [[ -n "$digest" ]]; then
-    actual="$(sha256_of "$tmp")"
-    if [[ "$actual" != "$digest" ]]; then
-      rm -f "$tmp"
-      die "checksum mismatch for ${asset} (expected ${digest}, got ${actual})"
-    fi
-  else
-    warn "no release checksum available for ${asset}; skipping verification"
+  digest="$(filen_checksum || true)"
+  if [[ -z "$digest" ]]; then
+    rm -f "$tmp"
+    die "no pinned checksum for ${asset}; refusing to install unverified"
+  fi
+  actual="$(sha256_of "$tmp")"
+  if [[ "$actual" != "$digest" ]]; then
+    rm -f "$tmp"
+    die "checksum mismatch for ${asset} (expected ${digest}, got ${actual})"
   fi
   chmod 0755 "$tmp"
   mv "$tmp" "$FILEN_BIN"
@@ -1093,6 +1100,7 @@ main() {
     refresh-timer)     cmd_refresh_timer ;;
     render-unit)       render_unit "${1:-}" ;;
     asset-name)        asset_name "${1:-}" "${2:-}" ;;
+    filen-checksum)    filen_checksum "${1:-}" "${2:-}" ;;
     rclone-target)     rclone_target "${1:-}" ;;
     check-marker)      unit_file_is_managed "${1:-}" ;;
     wait-mount)        wait_for_mount "${1:-}" "${2:-30}" ;;

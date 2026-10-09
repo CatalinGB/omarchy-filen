@@ -12,6 +12,7 @@ tests can assert call sequences) and reads its "live state" from files under
 active/inactive/failed and enabled/disabled.
 """
 
+import hashlib
 import os
 import pty
 import select
@@ -75,6 +76,9 @@ fi
 exit 0
 """
 
+FAKE_CURL_BODY = b"#!/usr/bin/env bash\nexit 0\n"
+FAKE_CURL_BODY_SHA256 = hashlib.sha256(FAKE_CURL_BODY).hexdigest()
+
 FAKE_CURL = r"""#!/usr/bin/env bash
 echo "curl $*" >> "$SYSTEMCTL_LOG"
 out=""
@@ -83,7 +87,7 @@ for ((i=0; i<${#args[@]}; i++)); do
   if [[ "${args[i]}" == "-o" ]]; then out="${args[i+1]:-}"; fi
 done
 if [[ -n "$out" ]]; then
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$out"
+  cp "$FAKE_CURL_BODY_FILE" "$out"
 fi
 exit 0
 """
@@ -179,6 +183,10 @@ class Harness:
                 "FAKE_SYSTEMCTL_ENABLED": str(self.fake_state / "enabled"),
                 "SYSTEMD_CREDS_RECORD": str(self.creds_record),
                 "FILEN_ARGV_LOG": str(self.argv_log),
+                # FAKE_CURL writes this fixed body, so pin its SHA-256 as the
+                # override: the install path then verifies and succeeds without
+                # a real (unforgeable) release checksum.
+                "OMARCHY_FILEN_SHA256": FAKE_CURL_BODY_SHA256,
             }
         )
         self._install_fakes()
@@ -220,6 +228,10 @@ class Harness:
     # ----------------------------------------------------------------- fakes
 
     def _install_fakes(self):
+        body_file = self.fake_bin / "curl-body"
+        body_file.write_bytes(FAKE_CURL_BODY)
+        body_file.chmod(0o644)
+        self.env["FAKE_CURL_BODY_FILE"] = str(body_file)
         write_exec(self.fake_bin / "systemctl", FAKE_SYSTEMCTL)
         write_exec(self.fake_bin / "systemd-creds", FAKE_SYSTEMD_CREDS)
         write_exec(self.fake_bin / "curl", FAKE_CURL)

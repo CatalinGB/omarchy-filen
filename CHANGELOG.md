@@ -8,6 +8,23 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-09
+
+### Security
+
+- `setup install` now verifies the downloaded `filen` binary against SHA-256
+  checksums pinned in `bin/setup` (`FILEN_CHECKSUM_*`) and **fails closed**: a
+  checksum lookup that returned nothing used to warn and install unverified
+  bytes, and the digest was fetched over HTTP at install time. The release
+  `digest` is now embedded per arch/libc (verified with
+  `bin/setup filen-checksum`), and `OMARCHY_FILEN_SHA256` still overrides it for
+  an out-of-band build.
+
+### Fixed
+
+- The `CI` workflow's `shellcheck` step no longer fails on `FILEN_SOURCE_REPO`,
+  which is read only by the upstream-pin workflow.
+
 ## [0.2.2] - 2026-10-09
 
 ### Fixed

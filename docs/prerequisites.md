@@ -7,7 +7,7 @@ hand. One install entry point, per-item one-action fixes in the panel.
 
 | Piece | How obtained | Pin / verify | Owner & location | Update |
 |---|---|---|---|---|
-| **`filen` CLI** | GitHub release asset `filen-cli-<ver>-<target>` from `filen-cli-releases` | **0.2.9** (a prerelease; **0.2.8 panics on mount** — see [the upstream issue draft](upstream-filen-rs-0.2.8-mount-panic.md)); SHA from the release asset `digest`; arch/libc-matched (`x86_64-unknown-linux-gnu` etc.) | plugin data dir: `~/.local/share/omarchy-filen/bin/filen` (not `~/.filen-cli`) | **plugin**; always run the CLI with `--skip-update` (it self-updates only in REPL mode); see [pin maintenance](pin-maintenance.md) |
+| **`filen` CLI** | GitHub release asset `filen-cli-<ver>-<target>` from `filen-cli-releases` | **0.2.9** (a prerelease; **0.2.8 panics on mount** — see [the upstream issue draft](upstream-filen-rs-0.2.8-mount-panic.md)); SHA-256 pinned in `bin/setup` (`FILEN_CHECKSUM_*`), from the release asset `digest`; arch/libc-matched (`x86_64-unknown-linux-gnu` etc.) | plugin data dir: `~/.local/share/omarchy-filen/bin/filen` (not `~/.filen-cli`) | **plugin**; always run the CLI with `--skip-update` (it self-updates only in REPL mode); see [pin maintenance](pin-maintenance.md) |
 | **rclone** | *not installed separately* — filen-rs downloads its own checksum-verified **1.74.2** into the config dir | filen-rs verifies the zip SHA-256 | keep a persistent copy in the plugin data dir; `ExecStartPre` symlinks it to `%t/filen/rclone-v1.74.2-linux-amd64` so it isn't re-downloaded each start | tied to the filen-rs version |
 | **fuse3 / fusermount3** | Omarchy ships it | detect only | system | — |
 | **python3** | Omarchy ships it | detect only | system | — |

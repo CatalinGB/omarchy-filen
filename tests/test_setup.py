@@ -71,6 +71,9 @@ class Harness:
 
         self.exec_log = self.tmp / "exec.log"
         self.env = os.environ.copy()
+        for key in list(self.env):
+            if key.startswith("OMARCHY_FILEN_"):
+                del self.env[key]
         self.env.update(
             {
                 "HOME": str(self.home),
@@ -230,6 +233,36 @@ class SetupTest(unittest.TestCase):
             self.h.run("rclone-target", "aarch64").stdout.strip(),
             "rclone-v1.74.2-linux-arm64",
         )
+
+    def test_filen_checksum_pins_each_platform(self):
+        expected = {
+            ("x86_64", "gnu"): "a86b22a2d0f0f32cf4ff24113dbf57fc274d85bbc83f42f9f4c248a1767aca29",
+            ("x86_64", "musl"): "9beec4db57991491f6464cb6eee8823bcf68a54a6b790133b6aa94717960ea8b",
+            ("aarch64", "gnu"): "166cffcf593fd7dfb1a8b93b75011c084caadb5ffcb9a58ff359ed5381c2c1a6",
+            ("aarch64", "musl"): "30e4293bffcc36a9a4ba95ea3f6c19b1c925bac61f29ebe17fae6d362da90703",
+        }
+        for (arch, libc), digest in expected.items():
+            result = self.h.run("filen-checksum", arch, libc)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), digest, f"{arch}/{libc}")
+
+    def test_filen_checksum_rejects_unknown_platform(self):
+        result = self.h.run("filen-checksum", "sparc", "gnu")
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_filen_checksum_override_wins(self):
+        env = dict(self.h.env)
+        env["OMARCHY_FILEN_SHA256"] = "f" * 64
+        result = subprocess.run(
+            [str(SETUP), "filen-checksum", "x86_64", "gnu"],
+            capture_output=True,
+            text=True,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "f" * 64)
 
     def test_marker_detection(self):
         managed = self.h.tmp / "managed.service"

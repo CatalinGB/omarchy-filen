@@ -71,6 +71,20 @@ class InstallFlowTest(_Base):
         self.assertIn("daemon-reload", calls)
         self.assertIn("enable --now filen-status.timer", calls)
 
+    def test_install_fails_closed_on_checksum_mismatch(self):
+        # The fake curl writes a body whose SHA is the harness override; a
+        # different override must make install refuse rather than install
+        # unverified bytes.
+        self.h.seed_rclone()
+        env = dict(self.h.env)
+        env["OMARCHY_FILEN_SHA256"] = "0" * 64
+
+        result = self.h.run("install", env=env)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checksum mismatch", result.stderr)
+        self.assertFalse(self.h.filen_bin.exists())
+
     def test_units_never_combine_runtime_directory_and_credential(self):
         self.h.seed_all()
         self.assertEqual(self.h.run("install").returncode, 0)
