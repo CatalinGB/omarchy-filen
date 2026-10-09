@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-09
+
 ### Added
 
 - [`docs/testing-standard.md`](docs/testing-standard.md) — the "prove a test
@@ -22,6 +24,13 @@ and this project adheres to
 
 - Dependabot is monthly and grouped (minor/patch together, majors alone); CI
   jobs gained a timeout and current action versions.
+- The repository preview (`preview.png`) is now a real screenshot of the panel.
+
+### Fixed
+
+- A successful status refresh now stamps `checkedAt` to the current time; it was
+  only carried forward from the previous fragment, so the panel treated freshly
+  fetched quota and recent files as permanently stale.
 
 ## [0.2.0] - 2026-10-04
 

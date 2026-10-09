@@ -1020,6 +1020,10 @@ try:
     quota = int(drive.get("totalStorage") or 0)
     fragment["ok"] = True
     fragment["authenticated"] = True
+    # A successful probe is a fresh reading: stamp it so the panel treats the
+    # quota and recents as current. The carry-forward above only preserves the
+    # prior time when the probe fails.
+    fragment["checkedAt"] = int(time.time())
     fragment["usedBytes"] = used
     fragment["quotaBytes"] = quota
     fragment["quotaKnown"] = quota > 0

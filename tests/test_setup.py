@@ -993,6 +993,34 @@ class SetupTest(unittest.TestCase):
         self.assertIs(fragment["ok"], False)
         self.assertGreaterEqual(fragment["checkedAt"], before)
 
+    def test_export_fragment_success_stamps_checked_at_now(self):
+        # Regression: a successful probe must advance checkedAt, or the panel
+        # treats a freshly refreshed fragment as stale forever (only the
+        # offline and first-run paths stamped it before).
+        out = self.h.tmp / "api-status.json"
+        out.write_text(
+            json.dumps({"ok": True, "checkedAt": 1700000000, "usedBytes": 1}),
+            encoding="utf-8",
+        )
+        fake = write_exec(self.h.tmp / "filen-fake", FAKE_FILEN)
+        before = int(time.time())
+
+        result = self.h.run(
+            "export-fragment",
+            "--filen",
+            str(fake),
+            "--config-dir",
+            str(self.h.tmp),
+            "--out",
+            str(out),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        fragment = json.loads(out.read_text(encoding="utf-8"))
+        self.assertIs(fragment["ok"], True)
+        self.assertGreaterEqual(fragment["checkedAt"], before)
+        self.assertNotEqual(fragment["checkedAt"], 1700000000)
+
 
 if __name__ == "__main__":
     unittest.main()
